@@ -1,9 +1,11 @@
 import { StatusBar } from "expo-status-bar";
-import { useEffect, useRef, useState } from "react";
+import { LinearGradient } from "expo-linear-gradient";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Animated,
   Easing,
   Linking,
+  PanResponder,
   PermissionsAndroid,
   Platform,
   Pressable,
@@ -31,6 +33,7 @@ import { useDeviceSelectors, useDeviceStore } from "@/store/device-store";
 
 type PermissionState = "idle" | "granted" | "denied";
 type ViewTab = "smart" | "audio" | "nearby";
+const tabOrder: ViewTab[] = ["smart", "audio", "nearby"];
 
 export default function Index() {
   const devicesById = useDeviceStore((state) => state.devicesById);
@@ -65,8 +68,44 @@ export default function Index() {
   const disconnectSubsRef = useRef<Record<string, () => void>>({});
   const refreshSpin = useRef(new Animated.Value(0)).current;
   const refreshPulse = useRef(new Animated.Value(1)).current;
+  const tabAnim = useRef(new Animated.Value(0)).current;
+  const activeTabRef = useRef<ViewTab>("smart");
 
   const nearbyDevices = nearbyIds.map((id) => devicesById[id]).filter(Boolean);
+
+  useEffect(() => {
+    activeTabRef.current = activeTab;
+    tabAnim.setValue(20);
+    Animated.parallel([
+      Animated.timing(tabAnim, {
+        toValue: 0,
+        duration: 220,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [activeTab, tabAnim]);
+
+  const panResponder = useMemo(
+    () =>
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_, gesture) =>
+        Math.abs(gesture.dx) > 18 && Math.abs(gesture.dx) > Math.abs(gesture.dy),
+      onPanResponderRelease: (_, gesture) => {
+        if (Math.abs(gesture.dx) < 50 || Math.abs(gesture.dx) < Math.abs(gesture.dy)) {
+          return;
+        }
+
+        const index = tabOrder.indexOf(activeTabRef.current);
+        if (gesture.dx < 0 && index < tabOrder.length - 1) {
+          setActiveTab(tabOrder[index + 1]);
+        } else if (gesture.dx > 0 && index > 0) {
+          setActiveTab(tabOrder[index - 1]);
+        }
+      },
+    }),
+    [],
+  );
 
   useEffect(() => {
     void ensurePermissions();
@@ -357,7 +396,13 @@ export default function Index() {
   }
 
   return (
-    <SafeAreaView className="flex-1 bg-slate-950">
+    <LinearGradient
+      colors={["#02040B", "#040A18", "#07142A", "#0A1A34"]}
+      start={{ x: 0, y: 0 }}
+      end={{ x: 1, y: 1 }}
+      style={{ flex: 1 }}
+    >
+    <SafeAreaView className="flex-1">
       <StatusBar style="light" />
       <View className="absolute -right-24 -top-16 h-80 w-80 rounded-full bg-brand-600/30" />
       <View className="absolute -left-24 top-52 h-80 w-80 rounded-full bg-cyan-400/20" />
@@ -365,6 +410,7 @@ export default function Index() {
       <ScrollView
         className="flex-1"
         contentContainerStyle={{ padding: 16, gap: 14 }}
+        {...panResponder.panHandlers}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -481,6 +527,15 @@ export default function Index() {
           </View>
         ) : null}
 
+        <Animated.View
+          style={{
+            opacity: tabAnim.interpolate({
+              inputRange: [0, 20],
+              outputRange: [1, 0.55],
+            }),
+            transform: [{ translateX: tabAnim }],
+          }}
+        >
         {activeTab === "smart" ? (
           <>
         <View className="flex-row items-center justify-between">
@@ -606,7 +661,9 @@ export default function Index() {
         })}
           </>
         ) : null}
+        </Animated.View>
       </ScrollView>
     </SafeAreaView>
+    </LinearGradient>
   );
 }
