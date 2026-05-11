@@ -1,12 +1,14 @@
 import { StatusBar } from "expo-status-bar";
 import { useEffect, useRef, useState } from "react";
 import {
+  Animated,
+  Easing,
   Linking,
   PermissionsAndroid,
   Platform,
   Pressable,
+  RefreshControl,
   ScrollView,
-  Switch,
   Text,
   View,
 } from "react-native";
@@ -21,23 +23,19 @@ import {
   startScan,
   type AdapterState,
 } from "@/lib/bluetooth/service";
-import { listPairedClassicDevices, type ClassicPairedDevice } from "@/lib/bluetooth/classic-service";
+import {
+  listPairedClassicDevices,
+  type ClassicPairedDevice,
+} from "@/lib/bluetooth/classic-service";
 import { useDeviceSelectors, useDeviceStore } from "@/store/device-store";
 
 type PermissionState = "idle" | "granted" | "denied";
-
-const demoDevices = [
-  { id: "demo-1", name: "Pulse Band Smart Watch", rssi: -51 },
-  { id: "demo-2", name: "Nano Buds Earpods", rssi: -64 },
-  { id: "demo-3", name: "TypeBoard Mini", rssi: -58 },
-];
+type ViewTab = "smart" | "audio" | "nearby";
 
 export default function Index() {
-  const bluetoothOn = useDeviceStore((state) => state.bluetoothOn);
   const devicesById = useDeviceStore((state) => state.devicesById);
   const nearbyIds = useDeviceStore((state) => state.nearbyIds);
   const retryStateById = useDeviceStore((state) => state.retryStateById);
-  const setBluetoothOn = useDeviceStore((state) => state.setBluetoothOn);
   const upsertNearbyDevice = useDeviceStore((state) => state.upsertNearbyDevice);
   const upsertConnectedDevice = useDeviceStore((state) => state.upsertConnectedDevice);
   const setDeviceState = useDeviceStore((state) => state.setDeviceState);
@@ -46,19 +44,28 @@ export default function Index() {
   const queueReconnect = useDeviceStore((state) => state.queueReconnect);
   const resetReconnect = useDeviceStore((state) => state.resetReconnect);
 
-  const { connectedDevices, lowBatteryDevices, unstableDevices } = useDeviceSelectors();
+  const { connectedDevices, lowBatteryDevices, unstableDevices } =
+    useDeviceSelectors();
 
   const [permission, setPermission] = useState<PermissionState>("idle");
   const [scanActive, setScanActive] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [busyById, setBusyById] = useState<Record<string, boolean>>({});
   const [bleError, setBleError] = useState<string | null>(null);
   const [classicError, setClassicError] = useState<string | null>(null);
   const [adapterState, setAdapterState] = useState<AdapterState>("Unknown");
-  const [classicPairedDevices, setClassicPairedDevices] = useState<ClassicPairedDevice[]>([]);
+  const [classicPairedDevices, setClassicPairedDevices] = useState<
+    ClassicPairedDevice[]
+  >([]);
+  const [activeTab, setActiveTab] = useState<ViewTab>("smart");
 
   const scanStopRef = useRef<null | (() => void)>(null);
-  const reconnectTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const reconnectTimersRef = useRef<
+    Record<string, ReturnType<typeof setTimeout>>
+  >({});
   const disconnectSubsRef = useRef<Record<string, () => void>>({});
+  const refreshSpin = useRef(new Animated.Value(0)).current;
+  const refreshPulse = useRef(new Animated.Value(1)).current;
 
   const nearbyDevices = nearbyIds.map((id) => devicesById[id]).filter(Boolean);
 
@@ -71,7 +78,10 @@ export default function Index() {
         setAdapterState(await getAdapterState());
         unsubState = monitorAdapterState(setAdapterState);
       } catch (error) {
-        const message = error instanceof Error ? error.message : "Unable to detect Bluetooth state.";
+        const message =
+          error instanceof Error
+            ? error.message
+            : "Unable to detect Bluetooth state.";
         setBleError(message);
       }
     })();
@@ -88,7 +98,50 @@ export default function Index() {
   }, []);
 
   useEffect(() => {
+    if (!refreshing) {
+      refreshSpin.stopAnimation();
+      refreshPulse.stopAnimation();
+      refreshSpin.setValue(0);
+      refreshPulse.setValue(1);
+      return;
+    }
+
+    const spinLoop = Animated.loop(
+      Animated.timing(refreshSpin, {
+        toValue: 1,
+        duration: 900,
+        easing: Easing.linear,
+        useNativeDriver: true,
+      }),
+    );
+
+    const pulseLoop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(refreshPulse, {
+          toValue: 0.65,
+          duration: 320,
+          useNativeDriver: true,
+        }),
+        Animated.timing(refreshPulse, {
+          toValue: 1,
+          duration: 320,
+          useNativeDriver: true,
+        }),
+      ]),
+    );
+
+    spinLoop.start();
+    pulseLoop.start();
+
+    return () => {
+      spinLoop.stop();
+      pulseLoop.stop();
+    };
+  }, [refreshPulse, refreshSpin, refreshing]);
+
+  useEffect(() => {
     if (permission !== "granted" || adapterState !== "PoweredOn") {
+      stopScanning();
       return;
     }
 
@@ -99,49 +152,40 @@ export default function Index() {
       } catch {
         // Ignore preload failures; scanning still works.
       }
-    })();
-  }, [adapterState, permission, upsertConnectedDevice]);
 
-  useEffect(() => {
-    if (permission !== "granted" || adapterState !== "PoweredOn") {
-      return;
-    }
-
-    void (async () => {
       try {
         const paired = await listPairedClassicDevices();
         setClassicPairedDevices(paired);
         setClassicError(null);
       } catch (error) {
         const message =
-          error instanceof Error ? error.message : "Failed to load classic paired devices.";
+          error instanceof Error
+            ? error.message
+            : "Failed to load classic paired devices.";
         setClassicError(message);
       }
+
+      stopScanning();
+      try {
+        scanStopRef.current = startScan((device) => {
+          upsertNearbyDevice({
+            id: device.id,
+            name: device.name,
+            rssi: device.rssi,
+          });
+        });
+        setScanActive(true);
+        setBleError(null);
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : "Smart device scan failed to start.";
+        setBleError(message);
+        setScanActive(false);
+      }
     })();
-  }, [adapterState, permission]);
-
-  useEffect(() => {
-    if (!bluetoothOn || permission !== "granted" || adapterState !== "PoweredOn") {
-      scanStopRef.current?.();
-      scanStopRef.current = null;
-      setScanActive(false);
-      return;
-    }
-
-    if (scanStopRef.current) return;
-
-    try {
-      scanStopRef.current = startScan((device) => {
-        upsertNearbyDevice({ id: device.id, name: device.name, rssi: device.rssi });
-      });
-      setScanActive(true);
-      setBleError(null);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "BLE scan failed to start.";
-      setBleError(message);
-      setScanActive(false);
-    }
-  }, [adapterState, bluetoothOn, permission, upsertNearbyDevice]);
+  }, [adapterState, permission, upsertConnectedDevice, upsertNearbyDevice]);
 
   async function ensurePermissions() {
     if (Platform.OS !== "android") {
@@ -157,10 +201,72 @@ export default function Index() {
 
     const result = await PermissionsAndroid.requestMultiple(permissions);
     const granted = permissions.every(
-      (permissionName) => result[permissionName] === PermissionsAndroid.RESULTS.GRANTED,
+      (permissionName) =>
+        result[permissionName] === PermissionsAndroid.RESULTS.GRANTED,
     );
 
     setPermission(granted ? "granted" : "denied");
+  }
+
+  function stopScanning() {
+    scanStopRef.current?.();
+    scanStopRef.current = null;
+    setScanActive(false);
+  }
+
+  function startScanning() {
+    if (permission !== "granted" || adapterState !== "PoweredOn") {
+      return;
+    }
+
+    stopScanning();
+
+    try {
+      scanStopRef.current = startScan((device) => {
+        upsertNearbyDevice({ id: device.id, name: device.name, rssi: device.rssi });
+      });
+      setScanActive(true);
+      setBleError(null);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Smart device scan failed to start.";
+      setBleError(message);
+      setScanActive(false);
+    }
+  }
+
+  async function loadConnectedBle() {
+    try {
+      const devices = await listConnectedDevices();
+      devices.forEach((device) => upsertConnectedDevice(device));
+    } catch {
+      // Ignore preload failures; scanning still works.
+    }
+  }
+
+  async function loadClassicPaired() {
+    try {
+      const paired = await listPairedClassicDevices();
+      setClassicPairedDevices(paired);
+      setClassicError(null);
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Failed to load classic paired devices.";
+      setClassicError(message);
+    }
+  }
+
+  async function refreshAll() {
+    if (permission !== "granted" || adapterState !== "PoweredOn") {
+      return;
+    }
+
+    setRefreshing(true);
+    await Promise.all([loadConnectedBle(), loadClassicPaired()]);
+    startScanning();
+    setRefreshing(false);
   }
 
   async function connect(id: string) {
@@ -176,10 +282,13 @@ export default function Index() {
       resetReconnect(id);
 
       disconnectSubsRef.current[id]?.();
-      disconnectSubsRef.current[id] = monitorUnexpectedDisconnect(id, (errorMessage) => {
-        setDeviceState(id, "reconnecting", errorMessage);
-        scheduleReconnect(id);
-      });
+      disconnectSubsRef.current[id] = monitorUnexpectedDisconnect(
+        id,
+        (errorMessage) => {
+          setDeviceState(id, "reconnecting", errorMessage);
+          scheduleReconnect(id);
+        },
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : "Connect failed";
       setDeviceState(id, "failed", message);
@@ -206,7 +315,8 @@ export default function Index() {
       setDeviceState(id, "disconnected");
       resetReconnect(id);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Disconnect failed";
+      const message =
+        error instanceof Error ? error.message : "Disconnect failed";
       setDeviceState(id, "failed", message);
     } finally {
       setBusyById((prev) => ({ ...prev, [id]: false }));
@@ -228,10 +338,6 @@ export default function Index() {
     reconnectTimersRef.current[id] = setTimeout(() => {
       void connect(id);
     }, retry.nextRetryInMs);
-  }
-
-  function seedNearbyDemo() {
-    demoDevices.forEach((device) => upsertNearbyDevice(device));
   }
 
   function batteryText(value?: number) {
@@ -257,42 +363,110 @@ export default function Index() {
       <View className="absolute -right-24 -top-16 h-80 w-80 rounded-full bg-brand-600/30" />
       <View className="absolute -left-24 top-52 h-80 w-80 rounded-full bg-cyan-400/20" />
 
-      <ScrollView className="flex-1" contentContainerStyle={{ padding: 16, gap: 14 }}>
+      <ScrollView
+        className="flex-1"
+        contentContainerStyle={{ padding: 16, gap: 14 }}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => void refreshAll()}
+            tintColor="#a5f3fc"
+          />
+        }
+      >
         <View className="flex-row items-start justify-between">
-          <View>
-            <Text className="text-xs font-semibold uppercase tracking-widest text-cyan-200">Blue Connect</Text>
-          </View>
-          <View className="items-center gap-1">
-            <Text className="text-xs font-semibold text-slate-300">Scan</Text>
-            <Switch value={bluetoothOn} onValueChange={setBluetoothOn} />
-          </View>
+          <Text className="text-xs font-semibold uppercase tracking-widest text-cyan-200">
+            Blue Connect
+          </Text>
         </View>
 
         <View className="rounded-3xl border border-white/15 bg-white/10 p-4">
           <Text className="text-xs font-semibold text-slate-300">Live Status</Text>
-          <Text className="mt-1 text-4xl font-black text-white">{connectedDevices.length} Active</Text>
+          <Text className="mt-1 text-4xl font-black text-white">
+            {connectedDevices.length} Active
+          </Text>
           <Text className="mt-3 text-xs text-slate-300">
-            Scan: {scanActive ? "Running" : "Stopped"} | Permission: {permission} | Adapter: {adapterState}
+            Scan: {scanActive ? "Running" : "Stopped"} | Permission: {permission}
+            {" | "}Adapter: {adapterState}
           </Text>
         </View>
-        <Text className="text-xs text-slate-300">BLE and classic paired devices are listed separately.</Text>
+        <View className="flex-row gap-3">
+          <Pressable
+            onPress={() => setActiveTab("smart")}
+            className={`rounded-full px-5 py-3 ${activeTab === "smart" ? "bg-cyan-300" : "bg-white/10"}`}
+          >
+            <Text className={`text-sm font-extrabold ${activeTab === "smart" ? "text-slate-900" : "text-slate-200"}`}>
+              Connected
+            </Text>
+          </Pressable>
+          <Pressable
+            onPress={() => setActiveTab("audio")}
+            className={`rounded-full px-5 py-3 ${activeTab === "audio" ? "bg-cyan-300" : "bg-white/10"}`}
+          >
+            <Text className={`text-sm font-extrabold ${activeTab === "audio" ? "text-slate-900" : "text-slate-200"}`}>
+              Audio
+            </Text>
+          </Pressable>
+          <Pressable
+            onPress={() => setActiveTab("nearby")}
+            className={`rounded-full px-5 py-3 ${activeTab === "nearby" ? "bg-cyan-300" : "bg-white/10"}`}
+          >
+            <Text className={`text-sm font-extrabold ${activeTab === "nearby" ? "text-slate-900" : "text-slate-200"}`}>
+              Nearby
+            </Text>
+          </Pressable>
+        </View>
+        {refreshing ? (
+          <Animated.View
+            className="flex-row items-center self-start rounded-full border border-cyan-200/30 bg-cyan-300/10 px-3 py-1"
+            style={{ opacity: refreshPulse }}
+          >
+            <Animated.View
+              className="mr-2 h-2 w-2 rounded-full bg-cyan-200"
+              style={{
+                transform: [
+                  {
+                    rotate: refreshSpin.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: ["0deg", "360deg"],
+                    }),
+                  },
+                ],
+              }}
+            />
+            <Text className="text-xs font-semibold text-cyan-100">Refreshing devices...</Text>
+          </Animated.View>
+        ) : null}
 
         {adapterState !== "PoweredOn" ? (
           <View className="rounded-2xl border border-amber-300/50 bg-amber-200/20 p-4">
             <Text className="text-sm font-bold text-amber-100">
-              Phone Bluetooth is OFF. The app can scan/connect only when Bluetooth is ON in system settings.
+              Phone Bluetooth is OFF. The app can scan/connect only when Bluetooth
+              is ON in system settings.
             </Text>
-            <Pressable onPress={() => void openBluetoothSettings()} className="mt-3 rounded-xl bg-amber-300 px-3 py-2">
-              <Text className="text-center text-sm font-bold text-slate-900">Open Settings</Text>
+            <Pressable
+              onPress={() => void openBluetoothSettings()}
+              className="mt-3 rounded-xl bg-amber-300 px-3 py-2"
+            >
+              <Text className="text-center text-sm font-bold text-slate-900">
+                Open Settings
+              </Text>
             </Pressable>
           </View>
         ) : null}
 
         {permission === "denied" ? (
           <View className="rounded-2xl border border-amber-300/50 bg-amber-200/20 p-4">
-            <Text className="text-sm font-bold text-amber-100">Bluetooth permission is required.</Text>
-            <Pressable onPress={() => void ensurePermissions()} className="mt-3 rounded-xl bg-amber-300 px-3 py-2">
-              <Text className="text-center text-sm font-bold text-slate-900">Grant Permission</Text>
+            <Text className="text-sm font-bold text-amber-100">
+              Bluetooth permission is required.
+            </Text>
+            <Pressable
+              onPress={() => void ensurePermissions()}
+              className="mt-3 rounded-xl bg-amber-300 px-3 py-2"
+            >
+              <Text className="text-center text-sm font-bold text-slate-900">
+                Grant Permission
+              </Text>
             </Pressable>
           </View>
         ) : null}
@@ -308,8 +482,10 @@ export default function Index() {
           </View>
         ) : null}
 
+        {activeTab === "smart" ? (
+          <>
         <View className="flex-row items-center justify-between">
-          <Text className="text-lg font-extrabold text-white">Connected Devices</Text>
+          <Text className="text-lg font-extrabold text-white">Connected Smart Devices</Text>
           <Text className="text-xs font-semibold text-slate-300">
             Unstable: {unstableDevices.length} | Low battery: {lowBatteryDevices.length}
           </Text>
@@ -322,12 +498,17 @@ export default function Index() {
         ) : null}
 
         {connectedDevices.map((device) => (
-          <View key={device.id} className="rounded-2xl border border-emerald-200/20 bg-emerald-300/10 p-4">
+          <View
+            key={device.id}
+            className="rounded-2xl border border-emerald-200/20 bg-emerald-300/10 p-4"
+          >
             <View className="flex-row items-start justify-between gap-3">
               <View className="flex-1">
                 <Text className="text-base font-bold text-white">{device.name}</Text>
                 <Text className="mt-1 text-xs text-emerald-100">State: {device.state}</Text>
-                <Text className="mt-1 text-xs text-emerald-100">Battery: {batteryText(device.battery)}</Text>
+                <Text className="mt-1 text-xs text-emerald-100">
+                  Battery: {batteryText(device.battery)}
+                </Text>
                 {retryStateById[device.id] ? (
                   <Text className="mt-1 text-xs text-amber-200">
                     Retry #{retryStateById[device.id].attempts} in {retryStateById[device.id].nextRetryInMs}ms
@@ -335,20 +516,34 @@ export default function Index() {
                 ) : null}
               </View>
               <View className="gap-2">
-                <Pressable onPress={() => void disconnect(device.id)} className="rounded-lg bg-white/20 px-3 py-2">
+                <Pressable
+                  onPress={() => void disconnect(device.id)}
+                  className="rounded-lg bg-white/20 px-3 py-2"
+                >
                   <Text className="text-xs font-bold text-white">Disconnect</Text>
                 </Pressable>
-                <Pressable onPress={() => toggleFavorite(device.id)} className="rounded-lg border border-white/20 px-3 py-2">
-                  <Text className="text-xs font-bold text-white">{device.isFavorite ? "Unfavorite" : "Favorite"}</Text>
+                <Pressable
+                  onPress={() => toggleFavorite(device.id)}
+                  className="rounded-lg border border-white/20 px-3 py-2"
+                >
+                  <Text className="text-xs font-bold text-white">
+                    {device.isFavorite ? "Unfavorite" : "Favorite"}
+                  </Text>
                 </Pressable>
               </View>
             </View>
           </View>
         ))}
+          </>
+        ) : null}
 
+        {activeTab === "audio" ? (
+          <>
         <View className="mt-2 flex-row items-center justify-between">
           <Text className="text-lg font-extrabold text-white">Classic Paired Devices</Text>
-          <Text className="text-xs font-semibold text-slate-300">{classicPairedDevices.length} paired</Text>
+          <Text className="text-xs font-semibold text-slate-300">
+            {classicPairedDevices.length} paired
+          </Text>
         </View>
 
         {classicPairedDevices.length === 0 ? (
@@ -358,23 +553,35 @@ export default function Index() {
         ) : null}
 
         {classicPairedDevices.map((device) => (
-          <View key={device.id} className="rounded-2xl border border-violet-200/20 bg-violet-300/10 p-4">
+          <View
+            key={device.id}
+            className="rounded-2xl border border-violet-200/20 bg-violet-300/10 p-4"
+          >
             <View className="flex-row items-start justify-between gap-3">
               <View className="flex-1">
                 <Text className="text-base font-bold text-white">{device.name}</Text>
                 <Text className="mt-1 text-xs text-violet-100">Type: Classic Bluetooth</Text>
               </View>
               <View className="rounded-full bg-white/20 px-3 py-1">
-                <Text className="text-xs font-bold text-white">{device.connected ? "Connected" : "Paired"}</Text>
+                <Text className="text-xs font-bold text-white">
+                  {device.connected ? "Connected" : "Paired"}
+                </Text>
               </View>
             </View>
           </View>
         ))}
+          </>
+        ) : null}
 
+        {activeTab === "nearby" ? (
+          <>
         <View className="mt-2 flex-row items-center justify-between">
           <Text className="text-lg font-extrabold text-white">Nearby Devices</Text>
-          <Pressable onPress={seedNearbyDemo} className="rounded-lg border border-cyan-200/30 px-3 py-2">
-            <Text className="text-xs font-bold text-cyan-100">Add Demo Devices</Text>
+          <Pressable
+            onPress={startScanning}
+            className="rounded-lg border border-cyan-200/30 px-3 py-2"
+          >
+            <Text className="text-xs font-bold text-cyan-100">Scan</Text>
           </Pressable>
         </View>
 
@@ -389,19 +596,25 @@ export default function Index() {
                   <Text className="text-base font-bold text-white">{device.name}</Text>
                   <Text className="mt-1 text-xs text-slate-300">RSSI: {device.rssi ?? "n/a"}</Text>
                   <Text className="mt-1 text-xs text-slate-300">State: {device.state}</Text>
-                  {device.lastError ? <Text className="mt-1 text-xs text-rose-200">Error: {device.lastError}</Text> : null}
+                  {device.lastError ? (
+                    <Text className="mt-1 text-xs text-rose-200">Error: {device.lastError}</Text>
+                  ) : null}
                 </View>
                 <Pressable
                   disabled={isBusy}
                   onPress={() => (canConnect ? void connect(device.id) : void disconnect(device.id))}
                   className="rounded-lg bg-cyan-300 px-3 py-2 disabled:opacity-60"
                 >
-                  <Text className="text-xs font-bold text-slate-900">{isBusy ? "Working..." : canConnect ? "Connect" : "Disconnect"}</Text>
+                  <Text className="text-xs font-bold text-slate-900">
+                    {isBusy ? "Working..." : canConnect ? "Connect" : "Disconnect"}
+                  </Text>
                 </Pressable>
               </View>
             </View>
           );
         })}
+          </>
+        ) : null}
       </ScrollView>
     </SafeAreaView>
   );
