@@ -40,7 +40,6 @@ export default function Index() {
   const upsertConnectedDevice = useDeviceStore((state) => state.upsertConnectedDevice);
   const setDeviceState = useDeviceStore((state) => state.setDeviceState);
   const setBattery = useDeviceStore((state) => state.setBattery);
-  const toggleFavorite = useDeviceStore((state) => state.toggleFavorite);
   const queueReconnect = useDeviceStore((state) => state.queueReconnect);
   const resetReconnect = useDeviceStore((state) => state.resetReconnect);
 
@@ -521,14 +520,6 @@ export default function Index() {
                   className="rounded-lg bg-white/20 px-3 py-2"
                 >
                   <Text className="text-xs font-bold text-white">Disconnect</Text>
-                </Pressable>
-                <Pressable
-                  onPress={() => toggleFavorite(device.id)}
-                  className="rounded-lg border border-white/20 px-3 py-2"
-                >
-                  <Text className="text-xs font-bold text-white">
-                    {device.isFavorite ? "Unfavorite" : "Favorite"}
-                  </Text>
                 </Pressable>
               </View>
             </View>
