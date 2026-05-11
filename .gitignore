@@ -41,3 +41,11 @@ app-example
 # generated native folders
 /ios
 /android
+
+# local skill source artifacts
+skills/*.skill
+skills/*.zip
+skills/*/*/
+
+# local brainstorming spec (keep untracked)
+docs/superpowers/specs/2026-05-11-bluetooth-device-manager-design.md
