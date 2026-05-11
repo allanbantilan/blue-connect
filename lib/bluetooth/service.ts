@@ -6,6 +6,14 @@ export type DiscoveredDevice = {
   rssi?: number | null;
 };
 
+export type AdapterState =
+  | "Unknown"
+  | "Resetting"
+  | "Unsupported"
+  | "Unauthorized"
+  | "PoweredOff"
+  | "PoweredOn";
+
 let manager: BleManager | null = null;
 
 function getManager(): BleManager {
@@ -48,6 +56,19 @@ export async function connectToDevice(id: string): Promise<Device> {
 export async function disconnectFromDevice(id: string): Promise<void> {
   const bleManager = getManager();
   await bleManager.cancelDeviceConnection(id);
+}
+
+export async function getAdapterState(): Promise<AdapterState> {
+  const bleManager = getManager();
+  return (await bleManager.state()) as AdapterState;
+}
+
+export function monitorAdapterState(
+  onChange: (state: AdapterState) => void,
+): () => void {
+  const bleManager = getManager();
+  const sub = bleManager.onStateChange((state) => onChange(state as AdapterState), true);
+  return () => sub.remove();
 }
 
 export function monitorUnexpectedDisconnect(

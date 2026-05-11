@@ -1,6 +1,7 @@
 import { StatusBar } from "expo-status-bar";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
+  Linking,
   PermissionsAndroid,
   Platform,
   Pressable,
@@ -13,16 +14,19 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import {
   connectToDevice,
   disconnectFromDevice,
+  getAdapterState,
+  monitorAdapterState,
   monitorUnexpectedDisconnect,
   startScan,
+  type AdapterState,
 } from "@/lib/bluetooth/service";
 import { useDeviceSelectors, useDeviceStore } from "@/store/device-store";
 
 type PermissionState = "idle" | "granted" | "denied";
 
 const demoDevices = [
-  { id: "demo-1", name: "Pulse Band", rssi: -51 },
-  { id: "demo-2", name: "Nano Buds", rssi: -64 },
+  { id: "demo-1", name: "Pulse Band Smart Watch", rssi: -51 },
+  { id: "demo-2", name: "Nano Buds Earpods", rssi: -64 },
   { id: "demo-3", name: "TypeBoard Mini", rssi: -58 },
 ];
 
@@ -39,34 +43,39 @@ export default function Index() {
   const queueReconnect = useDeviceStore((state) => state.queueReconnect);
   const resetReconnect = useDeviceStore((state) => state.resetReconnect);
 
-  const { connectedDevices, averageBattery, lowBatteryDevices, unstableDevices } =
-    useDeviceSelectors();
+  const { connectedDevices, lowBatteryDevices, unstableDevices } = useDeviceSelectors();
 
   const [permission, setPermission] = useState<PermissionState>("idle");
   const [scanActive, setScanActive] = useState(false);
   const [busyById, setBusyById] = useState<Record<string, boolean>>({});
   const [bleError, setBleError] = useState<string | null>(null);
+  const [adapterState, setAdapterState] = useState<AdapterState>("Unknown");
 
   const scanStopRef = useRef<null | (() => void)>(null);
   const reconnectTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const disconnectSubsRef = useRef<Record<string, () => void>>({});
-
-  const batteryHealth = useMemo(() => {
-    if (!connectedDevices.length) return "No active devices";
-    if (averageBattery > 70) return "Healthy";
-    if (averageBattery > 35) return "Stable";
-    return "Low";
-  }, [averageBattery, connectedDevices.length]);
 
   const nearbyDevices = nearbyIds.map((id) => devicesById[id]).filter(Boolean);
 
   useEffect(() => {
     void ensurePermissions();
 
+    let unsubState: null | (() => void) = null;
+    void (async () => {
+      try {
+        setAdapterState(await getAdapterState());
+        unsubState = monitorAdapterState(setAdapterState);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unable to detect Bluetooth state.";
+        setBleError(message);
+      }
+    })();
+
     const reconnectTimers = reconnectTimersRef.current;
     const disconnectSubs = disconnectSubsRef.current;
 
     return () => {
+      unsubState?.();
       scanStopRef.current?.();
       Object.values(reconnectTimers).forEach((timer) => clearTimeout(timer));
       Object.values(disconnectSubs).forEach((unsubscribe) => unsubscribe());
@@ -74,16 +83,14 @@ export default function Index() {
   }, []);
 
   useEffect(() => {
-    if (!bluetoothOn || permission !== "granted") {
+    if (!bluetoothOn || permission !== "granted" || adapterState !== "PoweredOn") {
       scanStopRef.current?.();
       scanStopRef.current = null;
       setScanActive(false);
       return;
     }
 
-    if (scanStopRef.current) {
-      return;
-    }
+    if (scanStopRef.current) return;
 
     try {
       scanStopRef.current = startScan((device) => {
@@ -92,12 +99,11 @@ export default function Index() {
       setScanActive(true);
       setBleError(null);
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "BLE scan failed to start.";
+      const message = error instanceof Error ? error.message : "BLE scan failed to start.";
       setBleError(message);
       setScanActive(false);
     }
-  }, [bluetoothOn, permission, upsertNearbyDevice]);
+  }, [adapterState, bluetoothOn, permission, upsertNearbyDevice]);
 
   async function ensurePermissions() {
     if (Platform.OS !== "android") {
@@ -190,6 +196,10 @@ export default function Index() {
     demoDevices.forEach((device) => upsertNearbyDevice(device));
   }
 
+  function batteryText(value?: number) {
+    return typeof value === "number" ? `${value}%` : "Battery unavailable";
+  }
+
   return (
     <SafeAreaView className="flex-1 bg-slate-950">
       <StatusBar style="light" />
@@ -199,15 +209,11 @@ export default function Index() {
       <ScrollView className="flex-1" contentContainerStyle={{ padding: 16, gap: 14 }}>
         <View className="flex-row items-start justify-between">
           <View>
-            <Text className="text-xs font-semibold uppercase tracking-widest text-cyan-200">
-              Blue Connect
-            </Text>
-            <Text className="mt-1 max-w-[230px] text-3xl font-black text-slate-50">
-              Multi BLE Device Manager
-            </Text>
+            <Text className="text-xs font-semibold uppercase tracking-widest text-cyan-200">Blue Connect</Text>
+            <Text className="mt-1 max-w-[260px] text-3xl font-black text-slate-50">Multi BLE Device Manager</Text>
           </View>
           <View className="items-center gap-1">
-            <Text className="text-xs font-semibold text-slate-300">Bluetooth</Text>
+            <Text className="text-xs font-semibold text-slate-300">Scan</Text>
             <Switch value={bluetoothOn} onValueChange={setBluetoothOn} />
           </View>
         </View>
@@ -215,20 +221,21 @@ export default function Index() {
         <View className="rounded-3xl border border-white/15 bg-white/10 p-4">
           <Text className="text-xs font-semibold text-slate-300">Live Status</Text>
           <Text className="mt-1 text-4xl font-black text-white">{connectedDevices.length} Active</Text>
-          <View className="mt-4 flex-row gap-2">
-            <View className="flex-1 rounded-2xl bg-slate-900/70 p-3">
-              <Text className="text-xs font-medium text-cyan-200">Battery Health</Text>
-              <Text className="mt-1 text-xl font-extrabold text-white">{batteryHealth}</Text>
-            </View>
-            <View className="flex-1 rounded-2xl bg-slate-900/70 p-3">
-              <Text className="text-xs font-medium text-cyan-200">Average Battery</Text>
-              <Text className="mt-1 text-xl font-extrabold text-white">{averageBattery}%</Text>
-            </View>
-          </View>
           <Text className="mt-3 text-xs text-slate-300">
-            Scan: {scanActive ? "Running" : "Stopped"} • Permission: {permission}
+            Scan: {scanActive ? "Running" : "Stopped"} | Permission: {permission} | Adapter: {adapterState}
           </Text>
         </View>
+
+        {adapterState !== "PoweredOn" ? (
+          <View className="rounded-2xl border border-amber-300/50 bg-amber-200/20 p-4">
+            <Text className="text-sm font-bold text-amber-100">
+              Phone Bluetooth is OFF. The app can scan/connect only when Bluetooth is ON in system settings.
+            </Text>
+            <Pressable onPress={() => void Linking.openSettings()} className="mt-3 rounded-xl bg-amber-300 px-3 py-2">
+              <Text className="text-center text-sm font-bold text-slate-900">Open Settings</Text>
+            </Pressable>
+          </View>
+        ) : null}
 
         {permission === "denied" ? (
           <View className="rounded-2xl border border-amber-300/50 bg-amber-200/20 p-4">
@@ -238,6 +245,7 @@ export default function Index() {
             </Pressable>
           </View>
         ) : null}
+
         {bleError ? (
           <View className="rounded-2xl border border-rose-300/50 bg-rose-200/20 p-4">
             <Text className="text-sm font-bold text-rose-100">{bleError}</Text>
@@ -247,7 +255,7 @@ export default function Index() {
         <View className="flex-row items-center justify-between">
           <Text className="text-lg font-extrabold text-white">Connected Devices</Text>
           <Text className="text-xs font-semibold text-slate-300">
-            Unstable: {unstableDevices.length} • Low: {lowBatteryDevices.length}
+            Unstable: {unstableDevices.length} | Low battery: {lowBatteryDevices.length}
           </Text>
         </View>
 
@@ -263,9 +271,7 @@ export default function Index() {
               <View className="flex-1">
                 <Text className="text-base font-bold text-white">{device.name}</Text>
                 <Text className="mt-1 text-xs text-emerald-100">State: {device.state}</Text>
-                <Text className="mt-1 text-xs text-emerald-100">
-                  Battery: {typeof device.battery === "number" ? `${device.battery}%` : "Battery unavailable"}
-                </Text>
+                <Text className="mt-1 text-xs text-emerald-100">Battery: {batteryText(device.battery)}</Text>
                 {retryStateById[device.id] ? (
                   <Text className="mt-1 text-xs text-amber-200">
                     Retry #{retryStateById[device.id].attempts} in {retryStateById[device.id].nextRetryInMs}ms
@@ -276,13 +282,8 @@ export default function Index() {
                 <Pressable onPress={() => void disconnect(device.id)} className="rounded-lg bg-white/20 px-3 py-2">
                   <Text className="text-xs font-bold text-white">Disconnect</Text>
                 </Pressable>
-                <Pressable
-                  onPress={() => toggleFavorite(device.id)}
-                  className="rounded-lg border border-white/20 px-3 py-2"
-                >
-                  <Text className="text-xs font-bold text-white">
-                    {device.isFavorite ? "Unfavorite" : "Favorite"}
-                  </Text>
+                <Pressable onPress={() => toggleFavorite(device.id)} className="rounded-lg border border-white/20 px-3 py-2">
+                  <Text className="text-xs font-bold text-white">{device.isFavorite ? "Unfavorite" : "Favorite"}</Text>
                 </Pressable>
               </View>
             </View>
@@ -297,7 +298,6 @@ export default function Index() {
         </View>
 
         {nearbyDevices.map((device) => {
-          const stateLabel = device.state;
           const isBusy = busyById[device.id];
           const canConnect = device.state !== "connected";
 
@@ -307,19 +307,15 @@ export default function Index() {
                 <View className="flex-1">
                   <Text className="text-base font-bold text-white">{device.name}</Text>
                   <Text className="mt-1 text-xs text-slate-300">RSSI: {device.rssi ?? "n/a"}</Text>
-                  <Text className="mt-1 text-xs text-slate-300">State: {stateLabel}</Text>
-                  {device.lastError ? (
-                    <Text className="mt-1 text-xs text-rose-200">Error: {device.lastError}</Text>
-                  ) : null}
+                  <Text className="mt-1 text-xs text-slate-300">State: {device.state}</Text>
+                  {device.lastError ? <Text className="mt-1 text-xs text-rose-200">Error: {device.lastError}</Text> : null}
                 </View>
                 <Pressable
                   disabled={isBusy}
                   onPress={() => (canConnect ? void connect(device.id) : void disconnect(device.id))}
                   className="rounded-lg bg-cyan-300 px-3 py-2 disabled:opacity-60"
                 >
-                  <Text className="text-xs font-bold text-slate-900">
-                    {isBusy ? "Working..." : canConnect ? "Connect" : "Disconnect"}
-                  </Text>
+                  <Text className="text-xs font-bold text-slate-900">{isBusy ? "Working..." : canConnect ? "Connect" : "Disconnect"}</Text>
                 </Pressable>
               </View>
             </View>
