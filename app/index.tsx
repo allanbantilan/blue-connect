@@ -21,6 +21,7 @@ import {
   startScan,
   type AdapterState,
 } from "@/lib/bluetooth/service";
+import { listPairedClassicDevices, type ClassicPairedDevice } from "@/lib/bluetooth/classic-service";
 import { useDeviceSelectors, useDeviceStore } from "@/store/device-store";
 
 type PermissionState = "idle" | "granted" | "denied";
@@ -51,7 +52,9 @@ export default function Index() {
   const [scanActive, setScanActive] = useState(false);
   const [busyById, setBusyById] = useState<Record<string, boolean>>({});
   const [bleError, setBleError] = useState<string | null>(null);
+  const [classicError, setClassicError] = useState<string | null>(null);
   const [adapterState, setAdapterState] = useState<AdapterState>("Unknown");
+  const [classicPairedDevices, setClassicPairedDevices] = useState<ClassicPairedDevice[]>([]);
 
   const scanStopRef = useRef<null | (() => void)>(null);
   const reconnectTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
@@ -98,6 +101,24 @@ export default function Index() {
       }
     })();
   }, [adapterState, permission, upsertConnectedDevice]);
+
+  useEffect(() => {
+    if (permission !== "granted" || adapterState !== "PoweredOn") {
+      return;
+    }
+
+    void (async () => {
+      try {
+        const paired = await listPairedClassicDevices();
+        setClassicPairedDevices(paired);
+        setClassicError(null);
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Failed to load classic paired devices.";
+        setClassicError(message);
+      }
+    })();
+  }, [adapterState, permission]);
 
   useEffect(() => {
     if (!bluetoothOn || permission !== "granted" || adapterState !== "PoweredOn") {
@@ -254,9 +275,7 @@ export default function Index() {
             Scan: {scanActive ? "Running" : "Stopped"} | Permission: {permission} | Adapter: {adapterState}
           </Text>
         </View>
-        <Text className="text-xs text-slate-300">
-          Note: only BLE peripherals are shown. Some paired earbuds use classic Bluetooth and will not appear here.
-        </Text>
+        <Text className="text-xs text-slate-300">BLE and classic paired devices are listed separately.</Text>
 
         {adapterState !== "PoweredOn" ? (
           <View className="rounded-2xl border border-amber-300/50 bg-amber-200/20 p-4">
@@ -281,6 +300,11 @@ export default function Index() {
         {bleError ? (
           <View className="rounded-2xl border border-rose-300/50 bg-rose-200/20 p-4">
             <Text className="text-sm font-bold text-rose-100">{bleError}</Text>
+          </View>
+        ) : null}
+        {classicError ? (
+          <View className="rounded-2xl border border-rose-300/50 bg-rose-200/20 p-4">
+            <Text className="text-sm font-bold text-rose-100">{classicError}</Text>
           </View>
         ) : null}
 
@@ -317,6 +341,31 @@ export default function Index() {
                 <Pressable onPress={() => toggleFavorite(device.id)} className="rounded-lg border border-white/20 px-3 py-2">
                   <Text className="text-xs font-bold text-white">{device.isFavorite ? "Unfavorite" : "Favorite"}</Text>
                 </Pressable>
+              </View>
+            </View>
+          </View>
+        ))}
+
+        <View className="mt-2 flex-row items-center justify-between">
+          <Text className="text-lg font-extrabold text-white">Classic Paired Devices</Text>
+          <Text className="text-xs font-semibold text-slate-300">{classicPairedDevices.length} paired</Text>
+        </View>
+
+        {classicPairedDevices.length === 0 ? (
+          <View className="rounded-2xl border border-white/15 bg-slate-900/50 p-4">
+            <Text className="text-sm text-slate-200">No paired classic devices found.</Text>
+          </View>
+        ) : null}
+
+        {classicPairedDevices.map((device) => (
+          <View key={device.id} className="rounded-2xl border border-violet-200/20 bg-violet-300/10 p-4">
+            <View className="flex-row items-start justify-between gap-3">
+              <View className="flex-1">
+                <Text className="text-base font-bold text-white">{device.name}</Text>
+                <Text className="mt-1 text-xs text-violet-100">Type: Classic Bluetooth</Text>
+              </View>
+              <View className="rounded-full bg-white/20 px-3 py-1">
+                <Text className="text-xs font-bold text-white">{device.connected ? "Connected" : "Paired"}</Text>
               </View>
             </View>
           </View>
