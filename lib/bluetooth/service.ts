@@ -14,6 +14,15 @@ export type AdapterState =
   | "PoweredOff"
   | "PoweredOn";
 
+const commonServiceUuids = [
+  "1800",
+  "1801",
+  "180A",
+  "180F",
+  "180D",
+  "1812",
+];
+
 let manager: BleManager | null = null;
 
 function getManager(): BleManager {
@@ -56,6 +65,16 @@ export async function connectToDevice(id: string): Promise<Device> {
 export async function disconnectFromDevice(id: string): Promise<void> {
   const bleManager = getManager();
   await bleManager.cancelDeviceConnection(id);
+}
+
+export async function listConnectedDevices(): Promise<DiscoveredDevice[]> {
+  const bleManager = getManager();
+  const devices = await bleManager.connectedDevices(commonServiceUuids);
+  return devices.map((device) => ({
+    id: device.id,
+    name: device.name ?? device.localName ?? "Connected BLE Device",
+    rssi: device.rssi,
+  }));
 }
 
 export async function getAdapterState(): Promise<AdapterState> {

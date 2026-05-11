@@ -10,6 +10,7 @@ type DeviceStore = {
   retryStateById: Record<string, RetryState>;
   setBluetoothOn: (value: boolean) => void;
   upsertNearbyDevice: (payload: { id: string; name: string; rssi?: number | null }) => void;
+  upsertConnectedDevice: (payload: { id: string; name: string; rssi?: number | null }) => void;
   setDeviceState: (id: string, state: BluetoothDevice["state"], lastError?: string) => void;
   setBattery: (id: string, battery?: number) => void;
   toggleFavorite: (id: string) => void;
@@ -42,6 +43,36 @@ export const useDeviceStore = create<DeviceStore>((set, get) => ({
           rssi: rssi ?? undefined,
           battery: undefined,
           state: "discovering",
+          isFavorite: false,
+          lastSeenAt: Date.now(),
+        };
+
+    const nextDevices = { ...get().devicesById, [id]: nextDevice };
+    const nextNearby = get().nearbyIds.includes(id) ? get().nearbyIds : [...get().nearbyIds, id];
+    set({
+      devicesById: nextDevices,
+      nearbyIds: nextNearby,
+      connectedIds: mergeConnectedIds(nextDevices),
+    });
+  },
+
+  upsertConnectedDevice: ({ id, name, rssi }) => {
+    const existing = get().devicesById[id];
+    const nextDevice: BluetoothDevice = existing
+      ? {
+          ...existing,
+          name,
+          rssi: rssi ?? existing.rssi,
+          state: "connected",
+          lastSeenAt: Date.now(),
+          lastError: undefined,
+        }
+      : {
+          id,
+          name,
+          rssi: rssi ?? undefined,
+          battery: undefined,
+          state: "connected",
           isFavorite: false,
           lastSeenAt: Date.now(),
         };

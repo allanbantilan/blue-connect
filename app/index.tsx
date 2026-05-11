@@ -15,6 +15,7 @@ import {
   connectToDevice,
   disconnectFromDevice,
   getAdapterState,
+  listConnectedDevices,
   monitorAdapterState,
   monitorUnexpectedDisconnect,
   startScan,
@@ -37,6 +38,7 @@ export default function Index() {
   const retryStateById = useDeviceStore((state) => state.retryStateById);
   const setBluetoothOn = useDeviceStore((state) => state.setBluetoothOn);
   const upsertNearbyDevice = useDeviceStore((state) => state.upsertNearbyDevice);
+  const upsertConnectedDevice = useDeviceStore((state) => state.upsertConnectedDevice);
   const setDeviceState = useDeviceStore((state) => state.setDeviceState);
   const setBattery = useDeviceStore((state) => state.setBattery);
   const toggleFavorite = useDeviceStore((state) => state.toggleFavorite);
@@ -81,6 +83,21 @@ export default function Index() {
       Object.values(disconnectSubs).forEach((unsubscribe) => unsubscribe());
     };
   }, []);
+
+  useEffect(() => {
+    if (permission !== "granted" || adapterState !== "PoweredOn") {
+      return;
+    }
+
+    void (async () => {
+      try {
+        const devices = await listConnectedDevices();
+        devices.forEach((device) => upsertConnectedDevice(device));
+      } catch {
+        // Ignore preload failures; scanning still works.
+      }
+    })();
+  }, [adapterState, permission, upsertConnectedDevice]);
 
   useEffect(() => {
     if (!bluetoothOn || permission !== "granted" || adapterState !== "PoweredOn") {
@@ -200,6 +217,19 @@ export default function Index() {
     return typeof value === "number" ? `${value}%` : "Battery unavailable";
   }
 
+  async function openBluetoothSettings() {
+    if (Platform.OS === "android") {
+      try {
+        await Linking.sendIntent("android.settings.BLUETOOTH_SETTINGS");
+        return;
+      } catch {
+        // Fallback below.
+      }
+    }
+
+    await Linking.openSettings();
+  }
+
   return (
     <SafeAreaView className="flex-1 bg-slate-950">
       <StatusBar style="light" />
@@ -210,7 +240,6 @@ export default function Index() {
         <View className="flex-row items-start justify-between">
           <View>
             <Text className="text-xs font-semibold uppercase tracking-widest text-cyan-200">Blue Connect</Text>
-            <Text className="mt-1 max-w-[260px] text-3xl font-black text-slate-50">Multi BLE Device Manager</Text>
           </View>
           <View className="items-center gap-1">
             <Text className="text-xs font-semibold text-slate-300">Scan</Text>
@@ -225,13 +254,16 @@ export default function Index() {
             Scan: {scanActive ? "Running" : "Stopped"} | Permission: {permission} | Adapter: {adapterState}
           </Text>
         </View>
+        <Text className="text-xs text-slate-300">
+          Note: only BLE peripherals are shown. Some paired earbuds use classic Bluetooth and will not appear here.
+        </Text>
 
         {adapterState !== "PoweredOn" ? (
           <View className="rounded-2xl border border-amber-300/50 bg-amber-200/20 p-4">
             <Text className="text-sm font-bold text-amber-100">
               Phone Bluetooth is OFF. The app can scan/connect only when Bluetooth is ON in system settings.
             </Text>
-            <Pressable onPress={() => void Linking.openSettings()} className="mt-3 rounded-xl bg-amber-300 px-3 py-2">
+            <Pressable onPress={() => void openBluetoothSettings()} className="mt-3 rounded-xl bg-amber-300 px-3 py-2">
               <Text className="text-center text-sm font-bold text-slate-900">Open Settings</Text>
             </Pressable>
           </View>
