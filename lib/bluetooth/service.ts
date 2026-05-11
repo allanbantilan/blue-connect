@@ -69,8 +69,14 @@ export async function disconnectFromDevice(id: string): Promise<void> {
 
 export async function listConnectedDevices(): Promise<DiscoveredDevice[]> {
   const bleManager = getManager();
-  const devices = await bleManager.connectedDevices(commonServiceUuids);
-  return devices.map((device) => ({
+  const allBySystem = await bleManager.connectedDevices([]);
+  const commonOnly = await bleManager.connectedDevices(commonServiceUuids);
+  const merged = [...allBySystem, ...commonOnly];
+  const unique = merged.filter(
+    (device, index, self) => self.findIndex((d) => d.id === device.id) === index,
+  );
+
+  return unique.map((device) => ({
     id: device.id,
     name: device.name ?? device.localName ?? "Connected BLE Device",
     rssi: device.rssi,

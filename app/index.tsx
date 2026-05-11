@@ -26,9 +26,13 @@ import {
   type AdapterState,
 } from "@/lib/bluetooth/service";
 import {
+  connectPairedClassicDevice,
   listPairedClassicDevices,
   type ClassicPairedDevice,
 } from "@/lib/bluetooth/classic-service";
+import { ConnectedTab } from "@/components/bluetooth/ConnectedTab";
+import { NearbyTab } from "@/components/bluetooth/NearbyTab";
+import { PairedTab } from "@/components/bluetooth/PairedTab";
 import { useDeviceSelectors, useDeviceStore } from "@/store/device-store";
 
 type PermissionState = "idle" | "granted" | "denied";
@@ -53,6 +57,7 @@ export default function Index() {
   const [scanActive, setScanActive] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [busyById, setBusyById] = useState<Record<string, boolean>>({});
+  const [pairedBusyById, setPairedBusyById] = useState<Record<string, boolean>>({});
   const [bleError, setBleError] = useState<string | null>(null);
   const [classicError, setClassicError] = useState<string | null>(null);
   const [adapterState, setAdapterState] = useState<AdapterState>("Unknown");
@@ -72,6 +77,17 @@ export default function Index() {
   const activeTabRef = useRef<ViewTab>("smart");
 
   const nearbyDevices = nearbyIds.map((id) => devicesById[id]).filter(Boolean);
+  const activeSystemDevices = classicPairedDevices
+    .filter((device) => device.connected)
+    .filter((device) => !connectedDevices.some((ble) => ble.id === device.id))
+    .map((device) => ({ id: device.id, name: device.name }));
+  const connectedAudioDeviceCount = [...connectedDevices.map((d) => d.name), ...activeSystemDevices.map((d) => d.name)]
+    .filter((name) => /ear|bud|pods|head|speaker|audio/i.test(name))
+    .length;
+  const audioSharingSupportLabel =
+    Platform.OS === "android" && Number(Platform.Version) >= 33
+      ? "Available on compatible phone + earbuds"
+      : "Unavailable (requires Android 13+)";
 
   useEffect(() => {
     activeTabRef.current = activeTab;
@@ -395,6 +411,42 @@ export default function Index() {
     await Linking.openSettings();
   }
 
+  async function openAudioSharingSettings() {
+    if (Platform.OS === "android") {
+      const intents = [
+        "android.settings.BLUETOOTH_SETTINGS",
+        "android.settings.SOUND_SETTINGS",
+      ];
+      for (const intent of intents) {
+        try {
+          await Linking.sendIntent(intent);
+          return;
+        } catch {
+          // Try next intent.
+        }
+      }
+    }
+
+    await Linking.openSettings();
+  }
+
+  async function connectPairedDevice(id: string) {
+    if (pairedBusyById[id]) return;
+
+    setPairedBusyById((prev) => ({ ...prev, [id]: true }));
+    try {
+      await connectPairedClassicDevice(id);
+      await loadClassicPaired();
+      setClassicError(null);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Unable to connect paired device.";
+      setClassicError(message);
+    } finally {
+      setPairedBusyById((prev) => ({ ...prev, [id]: false }));
+    }
+  }
+
   return (
     <LinearGradient
       colors={["#02040B", "#040A18", "#07142A", "#0A1A34"]}
@@ -449,7 +501,7 @@ export default function Index() {
             className={`rounded-full px-5 py-3 ${activeTab === "audio" ? "bg-cyan-300" : "bg-white/10"}`}
           >
             <Text className={`text-sm font-extrabold ${activeTab === "audio" ? "text-slate-900" : "text-slate-200"}`}>
-              Audio
+              Paired
             </Text>
           </Pressable>
           <Pressable
@@ -537,129 +589,37 @@ export default function Index() {
           }}
         >
         {activeTab === "smart" ? (
-          <>
-        <View className="flex-row items-center justify-between">
-          <Text className="text-lg font-extrabold text-white">Connected Smart Devices</Text>
-          <Text className="text-xs font-semibold text-slate-300">
-            Unstable: {unstableDevices.length} | Low battery: {lowBatteryDevices.length}
-          </Text>
-        </View>
-
-        {connectedDevices.length === 0 ? (
-          <View className="rounded-2xl border border-white/15 bg-slate-900/50 p-4">
-            <Text className="text-sm text-slate-200">No devices connected yet.</Text>
-          </View>
-        ) : null}
-
-        {connectedDevices.map((device) => (
-          <View
-            key={device.id}
-            className="rounded-2xl border border-emerald-200/20 bg-emerald-300/10 p-4"
-          >
-            <View className="flex-row items-start justify-between gap-3">
-              <View className="flex-1">
-                <Text className="text-base font-bold text-white">{device.name}</Text>
-                <Text className="mt-1 text-xs text-emerald-100">State: {device.state}</Text>
-                <Text className="mt-1 text-xs text-emerald-100">
-                  Battery: {batteryText(device.battery)}
-                </Text>
-                {retryStateById[device.id] ? (
-                  <Text className="mt-1 text-xs text-amber-200">
-                    Retry #{retryStateById[device.id].attempts} in {retryStateById[device.id].nextRetryInMs}ms
-                  </Text>
-                ) : null}
-              </View>
-              <View className="gap-2">
-                <Pressable
-                  onPress={() => void disconnect(device.id)}
-                  className="rounded-lg bg-white/20 px-3 py-2"
-                >
-                  <Text className="text-xs font-bold text-white">Disconnect</Text>
-                </Pressable>
-              </View>
-            </View>
-          </View>
-        ))}
-          </>
+          <ConnectedTab
+            connectedDevices={connectedDevices}
+            activeSystemDevices={activeSystemDevices}
+            lowBatteryCount={lowBatteryDevices.length}
+            unstableCount={unstableDevices.length}
+            retryStateById={retryStateById}
+            onDisconnect={(id) => void disconnect(id)}
+            batteryText={batteryText}
+            connectedAudioDeviceCount={connectedAudioDeviceCount}
+            onOpenAudioSharing={() => void openAudioSharingSettings()}
+            audioSharingSupportLabel={audioSharingSupportLabel}
+          />
         ) : null}
 
         {activeTab === "audio" ? (
-          <>
-        <View className="mt-2 flex-row items-center justify-between">
-          <Text className="text-lg font-extrabold text-white">Classic Paired Devices</Text>
-          <Text className="text-xs font-semibold text-slate-300">
-            {classicPairedDevices.length} paired
-          </Text>
-        </View>
-
-        {classicPairedDevices.length === 0 ? (
-          <View className="rounded-2xl border border-white/15 bg-slate-900/50 p-4">
-            <Text className="text-sm text-slate-200">No paired classic devices found.</Text>
-          </View>
-        ) : null}
-
-        {classicPairedDevices.map((device) => (
-          <View
-            key={device.id}
-            className="rounded-2xl border border-violet-200/20 bg-violet-300/10 p-4"
-          >
-            <View className="flex-row items-start justify-between gap-3">
-              <View className="flex-1">
-                <Text className="text-base font-bold text-white">{device.name}</Text>
-                <Text className="mt-1 text-xs text-violet-100">Type: Classic Bluetooth</Text>
-              </View>
-              <View className="rounded-full bg-white/20 px-3 py-1">
-                <Text className="text-xs font-bold text-white">
-                  {device.connected ? "Connected" : "Paired"}
-                </Text>
-              </View>
-            </View>
-          </View>
-        ))}
-          </>
+          <PairedTab
+            pairedDevices={classicPairedDevices}
+            busyById={pairedBusyById}
+            onConnect={(id) => void connectPairedDevice(id)}
+          />
         ) : null}
 
         {activeTab === "nearby" ? (
-          <>
-        <View className="mt-2 flex-row items-center justify-between">
-          <Text className="text-lg font-extrabold text-white">Nearby Devices</Text>
-          <Pressable
-            onPress={startScanning}
-            className="rounded-lg border border-cyan-200/30 px-3 py-2"
-          >
-            <Text className="text-xs font-bold text-cyan-100">Scan</Text>
-          </Pressable>
-        </View>
-
-        {nearbyDevices.map((device) => {
-          const isBusy = busyById[device.id];
-          const canConnect = device.state !== "connected";
-
-          return (
-            <View key={device.id} className="rounded-2xl border border-white/15 bg-white/10 p-4">
-              <View className="flex-row items-start justify-between gap-3">
-                <View className="flex-1">
-                  <Text className="text-base font-bold text-white">{device.name}</Text>
-                  <Text className="mt-1 text-xs text-slate-300">RSSI: {device.rssi ?? "n/a"}</Text>
-                  <Text className="mt-1 text-xs text-slate-300">State: {device.state}</Text>
-                  {device.lastError ? (
-                    <Text className="mt-1 text-xs text-rose-200">Error: {device.lastError}</Text>
-                  ) : null}
-                </View>
-                <Pressable
-                  disabled={isBusy}
-                  onPress={() => (canConnect ? void connect(device.id) : void disconnect(device.id))}
-                  className="rounded-lg bg-cyan-300 px-3 py-2 disabled:opacity-60"
-                >
-                  <Text className="text-xs font-bold text-slate-900">
-                    {isBusy ? "Working..." : canConnect ? "Connect" : "Disconnect"}
-                  </Text>
-                </Pressable>
-              </View>
-            </View>
-          );
-        })}
-          </>
+          <NearbyTab
+            nearbyDevices={nearbyDevices}
+            busyById={busyById}
+            onScan={startScanning}
+            onConnectOrDisconnect={(id, canConnect) =>
+              canConnect ? void connect(id) : void disconnect(id)
+            }
+          />
         ) : null}
         </Animated.View>
       </ScrollView>

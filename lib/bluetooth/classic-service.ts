@@ -39,9 +39,35 @@ export async function listPairedClassicDevices(): Promise<ClassicPairedDevice[]>
   }
 
   const bonded: ClassicDeviceRaw[] = await classic.getBondedDevices();
+  const connectedList: ClassicDeviceRaw[] = classic.getConnectedDevices
+    ? await classic.getConnectedDevices()
+    : [];
+  const connectedIds = new Set(
+    connectedList.map((device) => device.address ?? device.id).filter(Boolean),
+  );
+
   return bonded.map((device) => ({
     id: device.address ?? device.id ?? Math.random().toString(36).slice(2),
     name: device.name ?? "Paired Bluetooth Device",
-    connected: Boolean(device.connected),
+    connected: Boolean(device.connected) || connectedIds.has(device.address ?? device.id),
   }));
+}
+
+export async function connectPairedClassicDevice(deviceId: string): Promise<void> {
+  if (Platform.OS !== "android") {
+    throw new Error("Classic device connect is Android only.");
+  }
+
+  let classic: any;
+  try {
+    classic = getClassicModule();
+  } catch {
+    throw new Error("Classic Bluetooth module unavailable in this build.");
+  }
+
+  if (!classic?.connectToDevice) {
+    throw new Error("Classic Bluetooth connect API is not available in this build.");
+  }
+
+  await classic.connectToDevice(deviceId);
 }
