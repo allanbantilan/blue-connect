@@ -26,7 +26,6 @@ import {
   type AdapterState,
 } from "@/lib/bluetooth/service";
 import {
-  connectPairedClassicDevice,
   listPairedClassicDevices,
   type ClassicPairedDevice,
 } from "@/lib/bluetooth/classic-service";
@@ -57,7 +56,6 @@ export default function Index() {
   const [scanActive, setScanActive] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [busyById, setBusyById] = useState<Record<string, boolean>>({});
-  const [pairedBusyById, setPairedBusyById] = useState<Record<string, boolean>>({});
   const [bleError, setBleError] = useState<string | null>(null);
   const [classicError, setClassicError] = useState<string | null>(null);
   const [adapterState, setAdapterState] = useState<AdapterState>("Unknown");
@@ -78,9 +76,12 @@ export default function Index() {
 
   const nearbyDevices = nearbyIds.map((id) => devicesById[id]).filter(Boolean);
   const activeSystemDevices = classicPairedDevices
-    .filter((device) => device.connected)
     .filter((device) => !connectedDevices.some((ble) => ble.id === device.id))
-    .map((device) => ({ id: device.id, name: device.name }));
+    .map((device) => ({
+      id: device.id,
+      name: device.name,
+      status: device.connected ? "Active" : "Paired",
+    }));
   const connectedAudioDeviceCount = [...connectedDevices.map((d) => d.name), ...activeSystemDevices.map((d) => d.name)]
     .filter((name) => /ear|bud|pods|head|speaker|audio/i.test(name))
     .length;
@@ -430,23 +431,6 @@ export default function Index() {
     await Linking.openSettings();
   }
 
-  async function connectPairedDevice(id: string) {
-    if (pairedBusyById[id]) return;
-
-    setPairedBusyById((prev) => ({ ...prev, [id]: true }));
-    try {
-      await connectPairedClassicDevice(id);
-      await loadClassicPaired();
-      setClassicError(null);
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Unable to connect paired device.";
-      setClassicError(message);
-    } finally {
-      setPairedBusyById((prev) => ({ ...prev, [id]: false }));
-    }
-  }
-
   return (
     <LinearGradient
       colors={["#02040B", "#040A18", "#07142A", "#0A1A34"]}
@@ -606,8 +590,7 @@ export default function Index() {
         {activeTab === "audio" ? (
           <PairedTab
             pairedDevices={classicPairedDevices}
-            busyById={pairedBusyById}
-            onConnect={(id) => void connectPairedDevice(id)}
+            onOpenSettings={() => void openBluetoothSettings()}
           />
         ) : null}
 

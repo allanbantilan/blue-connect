@@ -10,6 +10,7 @@ type ConnectedDevice = {
 type ActiveSystemDevice = {
   id: string;
   name: string;
+  status: string;
 };
 
 type RetryState = {
@@ -116,7 +117,7 @@ export function ConnectedTab({
             <View className="flex-row items-start justify-between gap-3">
               <View className="min-w-0 flex-1 pr-2">
                 <Text className="text-sm font-bold text-white">{device.name}</Text>
-                <Text className="mt-1 text-xs text-violet-100">State: connected</Text>
+                <Text className="mt-1 text-xs text-violet-100">State: {device.status}</Text>
                 <Text className="mt-1 text-xs text-violet-100">Battery: unavailable</Text>
               </View>
               <View className="rounded-full bg-white/20 px-2.5 py-1">

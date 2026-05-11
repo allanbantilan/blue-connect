@@ -8,11 +8,10 @@ type PairedDevice = {
 
 type PairedTabProps = {
   pairedDevices: PairedDevice[];
-  busyById: Record<string, boolean>;
-  onConnect: (id: string) => void;
+  onOpenSettings: () => void;
 };
 
-export function PairedTab({ pairedDevices, busyById, onConnect }: PairedTabProps) {
+export function PairedTab({ pairedDevices, onOpenSettings }: PairedTabProps) {
   return (
     <>
       <View className="mt-2 flex-row items-center justify-between">
@@ -47,12 +46,11 @@ export function PairedTab({ pairedDevices, busyById, onConnect }: PairedTabProps
                 </View>
                 {!device.connected ? (
                   <Pressable
-                    onPress={() => onConnect(device.id)}
-                    disabled={busyById[device.id]}
-                    className="rounded-lg bg-cyan-300 px-2.5 py-1.5 disabled:opacity-60"
+                    onPress={onOpenSettings}
+                    className="rounded-lg bg-cyan-300 px-2.5 py-1.5"
                   >
                     <Text className="text-[11px] font-bold text-slate-900">
-                      {busyById[device.id] ? "Connecting..." : "Connect"}
+                      Connect in Settings
                     </Text>
                   </Pressable>
                 ) : null}
