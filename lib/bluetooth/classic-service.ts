@@ -46,11 +46,23 @@ export async function listPairedClassicDevices(): Promise<ClassicPairedDevice[]>
     connectedList.map((device) => device.address ?? device.id).filter(Boolean),
   );
 
-  return bonded.map((device) => ({
-    id: device.address ?? device.id ?? Math.random().toString(36).slice(2),
-    name: device.name ?? "Paired Bluetooth Device",
-    connected: Boolean(device.connected) || connectedIds.has(device.address ?? device.id),
-  }));
+  const merged = [...bonded, ...connectedList];
+  const unique = merged.filter((device, index, self) => {
+    const id = device.address ?? device.id;
+    if (!id) return false;
+    return (
+      self.findIndex((candidate) => (candidate.address ?? candidate.id) === id) === index
+    );
+  });
+
+  return unique.map((device) => {
+    const id = device.address ?? device.id ?? Math.random().toString(36).slice(2);
+    return {
+      id,
+      name: device.name ?? "Paired Bluetooth Device",
+      connected: Boolean(device.connected) || connectedIds.has(id),
+    };
+  });
 }
 
 export async function connectPairedClassicDevice(deviceId: string): Promise<void> {

@@ -29,6 +29,7 @@ import {
   listPairedClassicDevices,
   type ClassicPairedDevice,
 } from "@/lib/bluetooth/classic-service";
+import { listActiveBluetoothAudioOutputs } from "@/lib/bluetooth/system-audio-service";
 import { ConnectedTab } from "@/components/bluetooth/ConnectedTab";
 import { NearbyTab } from "@/components/bluetooth/NearbyTab";
 import { PairedTab } from "@/components/bluetooth/PairedTab";
@@ -63,6 +64,9 @@ export default function Index() {
     ClassicPairedDevice[]
   >([]);
   const [activeTab, setActiveTab] = useState<ViewTab>("smart");
+  const [systemAudioOutputs, setSystemAudioOutputs] = useState<
+    { id: string; name: string; address?: string }[]
+  >([]);
 
   const scanStopRef = useRef<null | (() => void)>(null);
   const reconnectTimersRef = useRef<
@@ -75,14 +79,39 @@ export default function Index() {
   const activeTabRef = useRef<ViewTab>("smart");
 
   const nearbyDevices = nearbyIds.map((id) => devicesById[id]).filter(Boolean);
-  const activeSystemDevices = classicPairedDevices
-    .filter((device) => !connectedDevices.some((ble) => ble.id === device.id))
-    .map((device) => ({
-      id: device.id,
-      name: device.name,
-      status: device.connected ? "Active" : "Paired",
-    }));
-  const connectedAudioDeviceCount = [...connectedDevices.map((d) => d.name), ...activeSystemDevices.map((d) => d.name)]
+  const activeAudioNameSet = new Set(
+    systemAudioOutputs.map((device) => device.name.trim().toLowerCase()),
+  );
+  const activeSystemDevices = [
+    ...classicPairedDevices
+      .filter((device) => !connectedDevices.some((ble) => ble.id === device.id))
+      .map((device) => {
+        const matchedByName = activeAudioNameSet.has(device.name.trim().toLowerCase());
+        const isActive = device.connected || matchedByName;
+        return {
+          id: device.id,
+          name: device.name,
+          status: isActive ? "Active" : "Paired",
+        };
+      }),
+    ...systemAudioOutputs
+      .filter(
+        (output) =>
+          !connectedDevices.some((ble) => ble.name.trim().toLowerCase() === output.name.trim().toLowerCase()) &&
+          !classicPairedDevices.some(
+            (paired) => paired.name.trim().toLowerCase() === output.name.trim().toLowerCase(),
+          ),
+      )
+      .map((output) => ({
+        id: output.id,
+        name: output.name,
+        status: "Active",
+      })),
+  ];
+  const connectedAudioDeviceCount = [
+    ...connectedDevices.map((d) => d.name),
+    ...activeSystemDevices.filter((d) => d.status === "Active").map((d) => d.name),
+  ]
     .filter((name) => /ear|bud|pods|head|speaker|audio/i.test(name))
     .length;
   const audioSharingSupportLabel =
@@ -220,6 +249,8 @@ export default function Index() {
         setClassicError(message);
       }
 
+      await loadSystemAudioOutputs();
+
       stopScanning();
       try {
         scanStopRef.current = startScan((device) => {
@@ -241,6 +272,34 @@ export default function Index() {
       }
     })();
   }, [adapterState, permission, upsertConnectedDevice, upsertNearbyDevice]);
+
+  useEffect(() => {
+    if (activeTab !== "smart") return;
+    if (permission !== "granted" || adapterState !== "PoweredOn") return;
+
+    void (async () => {
+      try {
+        const devices = await listConnectedDevices();
+        devices.forEach((device) => upsertConnectedDevice(device));
+      } catch {
+        // ignore refresh failure
+      }
+
+      try {
+        const paired = await listPairedClassicDevices();
+        setClassicPairedDevices(paired);
+        setClassicError(null);
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : "Failed to load classic paired devices.";
+        setClassicError(message);
+      }
+
+      await loadSystemAudioOutputs();
+    })();
+  }, [activeTab, adapterState, permission, upsertConnectedDevice]);
 
   async function ensurePermissions() {
     if (Platform.OS !== "android") {
@@ -313,13 +372,22 @@ export default function Index() {
     }
   }
 
+  async function loadSystemAudioOutputs() {
+    try {
+      const outputs = await listActiveBluetoothAudioOutputs();
+      setSystemAudioOutputs(outputs);
+    } catch {
+      setSystemAudioOutputs([]);
+    }
+  }
+
   async function refreshAll() {
     if (permission !== "granted" || adapterState !== "PoweredOn") {
       return;
     }
 
     setRefreshing(true);
-    await Promise.all([loadConnectedBle(), loadClassicPaired()]);
+    await Promise.all([loadConnectedBle(), loadClassicPaired(), loadSystemAudioOutputs()]);
     startScanning();
     setRefreshing(false);
   }
