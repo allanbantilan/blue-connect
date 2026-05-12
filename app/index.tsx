@@ -10,6 +10,7 @@ import {
   Platform,
   Pressable,
   RefreshControl,
+  Share,
   ScrollView,
   Text,
   View,
@@ -30,6 +31,7 @@ import {
   type ClassicPairedDevice,
 } from "@/lib/bluetooth/classic-service";
 import {
+  getSystemAudioDebugStatus,
   listActiveBluetoothAudioOutputs,
   listConnectedProfileDevices,
 } from "@/lib/bluetooth/system-audio-service";
@@ -73,6 +75,7 @@ export default function Index() {
   const [profileConnectedDevices, setProfileConnectedDevices] = useState<
     { id: string; name: string; address?: string }[]
   >([]);
+  const [showDebug, setShowDebug] = useState(false);
 
   const scanStopRef = useRef<null | (() => void)>(null);
   const reconnectTimersRef = useRef<
@@ -88,12 +91,27 @@ export default function Index() {
   const activeAudioNameSet = new Set(
     systemAudioOutputs.map((device) => device.name.trim().toLowerCase()),
   );
+  const profileConnectedAddressSet = new Set(
+    profileConnectedDevices
+      .map((device) => device.address?.trim().toUpperCase())
+      .filter(Boolean),
+  );
+  const profileConnectedNameSet = new Set(
+    profileConnectedDevices.map((device) => device.name.trim().toLowerCase()),
+  );
   const activeSystemDevices = [
     ...classicPairedDevices
       .filter((device) => !connectedDevices.some((ble) => ble.id === device.id))
       .map((device) => {
         const matchedByName = activeAudioNameSet.has(device.name.trim().toLowerCase());
-        const isActive = device.connected || matchedByName;
+        const matchedByProfileAddress = profileConnectedAddressSet.has(
+          device.id.trim().toUpperCase(),
+        );
+        const matchedByProfileName = profileConnectedNameSet.has(
+          device.name.trim().toLowerCase(),
+        );
+        const isActive =
+          device.connected || matchedByName || matchedByProfileAddress || matchedByProfileName;
         return {
           id: device.id,
           name: device.name,
@@ -121,11 +139,7 @@ export default function Index() {
               ble.id === profileDevice.address ||
               ble.name.trim().toLowerCase() === profileDevice.name.trim().toLowerCase(),
           ) &&
-          !classicPairedDevices.some(
-            (paired) =>
-              paired.id === profileDevice.address ||
-              paired.name.trim().toLowerCase() === profileDevice.name.trim().toLowerCase(),
-          ) &&
+          !classicPairedDevices.some((paired) => paired.id === profileDevice.address) &&
           !systemAudioOutputs.some(
             (output) =>
               output.address === profileDevice.address ||
@@ -148,6 +162,24 @@ export default function Index() {
     Platform.OS === "android" && Number(Platform.Version) >= 33
       ? "Available on compatible phone + earbuds"
       : "Unavailable (requires Android 13+)";
+  const nativeDebug = getSystemAudioDebugStatus();
+  const debugText = [
+    `Native module: ${nativeDebug.modulePresent ? "YES" : "NO"}`,
+    `Audio method: ${nativeDebug.hasAudioOutputsMethod ? "YES" : "NO"}`,
+    `Profile method: ${nativeDebug.hasProfileMethod ? "YES" : "NO"}`,
+    `BLE connected (${connectedDevices.length}): ${connectedDevices.map((d) => d.name).join(", ") || "-"}`,
+    `Paired/classic (${classicPairedDevices.length}): ${
+      classicPairedDevices
+        .map((d) => `${d.name}(${d.connected ? "connected" : "paired"})`)
+        .join(", ") || "-"
+    }`,
+    `System audio outputs (${systemAudioOutputs.length}): ${
+      systemAudioOutputs.map((d) => d.name).join(", ") || "-"
+    }`,
+    `Profile connected (${profileConnectedDevices.length}): ${
+      profileConnectedDevices.map((d) => d.name).join(", ") || "-"
+    }`,
+  ].join("\n");
 
   useEffect(() => {
     activeTabRef.current = activeTab;
@@ -543,6 +575,17 @@ export default function Index() {
     await Linking.openSettings();
   }
 
+  async function copyDebugList() {
+    try {
+      await Share.share({
+        title: "Blue Connect Debug",
+        message: debugText,
+      });
+    } catch {
+      // no-op
+    }
+  }
+
   return (
     <LinearGradient
       colors={["#02040B", "#040A18", "#07142A", "#0A1A34"]}
@@ -571,6 +614,14 @@ export default function Index() {
           <Text className="text-xs font-semibold uppercase tracking-widest text-cyan-200">
             Blue Connect
           </Text>
+          <Pressable
+            onPress={() => setShowDebug((prev) => !prev)}
+            className="rounded-full border border-white/20 bg-white/10 px-3 py-1"
+          >
+            <Text className="text-[11px] font-bold text-cyan-100">
+              {showDebug ? "Hide Debug" : "Show Debug"}
+            </Text>
+          </Pressable>
         </View>
 
         <View className="rounded-3xl border border-white/15 bg-white/10 p-4">
@@ -672,6 +723,51 @@ export default function Index() {
         {classicError ? (
           <View className="rounded-2xl border border-rose-300/50 bg-rose-200/20 p-4">
             <Text className="text-sm font-bold text-rose-100">{classicError}</Text>
+          </View>
+        ) : null}
+        {showDebug ? (
+          <View className="rounded-2xl border border-white/15 bg-slate-900/60 p-4">
+            <View className="flex-row items-center justify-between">
+              <Text className="text-sm font-extrabold text-cyan-100">Debug Sources</Text>
+              <Pressable
+                onPress={() => void copyDebugList()}
+                className="rounded-lg bg-cyan-300 px-2.5 py-1.5"
+              >
+                <Text className="text-[11px] font-bold text-slate-900">Copy Debug</Text>
+              </Pressable>
+            </View>
+            <Text className="mt-2 text-xs text-slate-200">
+              Native module: {nativeDebug.modulePresent ? "YES" : "NO"} | Audio method:{" "}
+              {nativeDebug.hasAudioOutputsMethod ? "YES" : "NO"} | Profile method:{" "}
+              {nativeDebug.hasProfileMethod ? "YES" : "NO"}
+            </Text>
+            <Text className="mt-2 text-xs text-slate-200">
+              BLE connected: {connectedDevices.length}
+            </Text>
+            <Text className="text-xs text-slate-200">
+              Paired/classic: {classicPairedDevices.length}
+            </Text>
+            <Text className="text-xs text-slate-200">
+              System audio outputs: {systemAudioOutputs.length}
+            </Text>
+            <Text className="text-xs text-slate-200">
+              Profile connected: {profileConnectedDevices.length}
+            </Text>
+            <Text className="mt-2 text-[11px] text-slate-300">
+              BLE: {connectedDevices.map((d) => d.name).join(", ") || "-"}
+            </Text>
+            <Text className="text-[11px] text-slate-300">
+              Paired:{" "}
+              {classicPairedDevices
+                .map((d) => `${d.name}(${d.connected ? "connected" : "paired"})`)
+                .join(", ") || "-"}
+            </Text>
+            <Text className="text-[11px] text-slate-300">
+              Audio outputs: {systemAudioOutputs.map((d) => d.name).join(", ") || "-"}
+            </Text>
+            <Text className="text-[11px] text-slate-300">
+              Profiles: {profileConnectedDevices.map((d) => d.name).join(", ") || "-"}
+            </Text>
           </View>
         ) : null}
 

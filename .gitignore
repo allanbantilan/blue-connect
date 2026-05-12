@@ -38,10 +38,6 @@ yarn-error.*
 
 app-example
 
-# generated native folders
-/ios
-/android
-
 # local skill source artifacts
 skills/*.skill
 skills/*.zip

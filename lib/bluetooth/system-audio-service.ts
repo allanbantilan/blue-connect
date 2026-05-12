@@ -24,6 +24,15 @@ function getAudioModule(): AudioModule | null {
   return NativeModules.SystemAudioDevices ?? null;
 }
 
+export function getSystemAudioDebugStatus() {
+  const module = getAudioModule();
+  return {
+    modulePresent: Boolean(module),
+    hasAudioOutputsMethod: Boolean(module?.getActiveBluetoothAudioOutputs),
+    hasProfileMethod: Boolean(module?.getConnectedProfileDevices),
+  };
+}
+
 export async function listActiveBluetoothAudioOutputs(): Promise<SystemAudioOutput[]> {
   const module = getAudioModule();
   if (!module?.getActiveBluetoothAudioOutputs) {
