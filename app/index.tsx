@@ -33,7 +33,9 @@ import {
 import {
   getSystemAudioDebugStatus,
   listActiveBluetoothAudioOutputs,
+  listBondedDeviceBatteryLevels,
   listConnectedProfileDevices,
+  pairBluetoothDevice,
 } from "@/lib/bluetooth/system-audio-service";
 import { ConnectedTab } from "@/components/bluetooth/ConnectedTab";
 import { NearbyTab } from "@/components/bluetooth/NearbyTab";
@@ -50,6 +52,9 @@ export default function Index() {
   const retryStateById = useDeviceStore((state) => state.retryStateById);
   const upsertNearbyDevice = useDeviceStore((state) => state.upsertNearbyDevice);
   const upsertConnectedDevice = useDeviceStore((state) => state.upsertConnectedDevice);
+  const reconcileConnectedSnapshot = useDeviceStore(
+    (state) => state.reconcileConnectedSnapshot,
+  );
   const setDeviceState = useDeviceStore((state) => state.setDeviceState);
   const setBattery = useDeviceStore((state) => state.setBattery);
   const queueReconnect = useDeviceStore((state) => state.queueReconnect);
@@ -76,6 +81,12 @@ export default function Index() {
     { id: string; name: string; address?: string }[]
   >([]);
   const [showDebug, setShowDebug] = useState(false);
+  const [deviceBatteryByAddress, setDeviceBatteryByAddress] = useState<
+    Record<string, number>
+  >({});
+  const [deviceBatteryByName, setDeviceBatteryByName] = useState<Record<string, number>>(
+    {},
+  );
 
   const scanStopRef = useRef<null | (() => void)>(null);
   const reconnectTimersRef = useRef<
@@ -116,6 +127,9 @@ export default function Index() {
           id: device.id,
           name: device.name,
           status: isActive ? "Active" : "Paired",
+          battery:
+            deviceBatteryByAddress[device.id.trim().toUpperCase()] ??
+            deviceBatteryByName[device.name.trim().toLowerCase()],
         };
       }),
     ...systemAudioOutputs
@@ -130,6 +144,10 @@ export default function Index() {
         id: output.id,
         name: output.name,
         status: "Active",
+        battery:
+          (output.address
+            ? deviceBatteryByAddress[output.address.trim().toUpperCase()]
+            : undefined) ?? deviceBatteryByName[output.name.trim().toLowerCase()],
       })),
     ...profileConnectedDevices
       .filter(
@@ -150,14 +168,40 @@ export default function Index() {
         id: profileDevice.id,
         name: profileDevice.name,
         status: "Active",
+        battery:
+          (profileDevice.address
+            ? deviceBatteryByAddress[profileDevice.address.trim().toUpperCase()]
+            : undefined) ?? deviceBatteryByName[profileDevice.name.trim().toLowerCase()],
       })),
   ];
-  const connectedAudioDeviceCount = [
-    ...connectedDevices.map((d) => d.name),
-    ...activeSystemDevices.filter((d) => d.status === "Active").map((d) => d.name),
-  ]
-    .filter((name) => /ear|bud|pods|head|speaker|audio/i.test(name))
-    .length;
+  const connectedSystemDevices = activeSystemDevices.filter(
+    (device) => device.status === "Active",
+  );
+  const pairedDevicesWithActiveState = classicPairedDevices
+    .map((device) => {
+      const matchedByName = activeAudioNameSet.has(device.name.trim().toLowerCase());
+      const matchedByProfileAddress = profileConnectedAddressSet.has(
+        device.id.trim().toUpperCase(),
+      );
+      const matchedByProfileName = profileConnectedNameSet.has(
+        device.name.trim().toLowerCase(),
+      );
+      const connected =
+        device.connected || matchedByName || matchedByProfileAddress || matchedByProfileName;
+      return {
+        ...device,
+        connected,
+        battery:
+          deviceBatteryByAddress[device.id.trim().toUpperCase()] ??
+          deviceBatteryByName[device.name.trim().toLowerCase()],
+      };
+    })
+    .sort((a, b) => Number(b.connected) - Number(a.connected));
+  const pairedIdSet = new Set(
+    classicPairedDevices.map((device) => device.id.trim().toUpperCase()),
+  );
+  const connectedAudioDeviceCount = connectedDevices.length + connectedSystemDevices.length;
+  const totalActiveConnectedCount = connectedDevices.length + connectedSystemDevices.length;
   const audioSharingSupportLabel =
     Platform.OS === "android" && Number(Platform.Version) >= 33
       ? "Available on compatible phone + earbuds"
@@ -167,6 +211,7 @@ export default function Index() {
     `Native module: ${nativeDebug.modulePresent ? "YES" : "NO"}`,
     `Audio method: ${nativeDebug.hasAudioOutputsMethod ? "YES" : "NO"}`,
     `Profile method: ${nativeDebug.hasProfileMethod ? "YES" : "NO"}`,
+    `Battery method: ${nativeDebug.hasBatteryMethod ? "YES" : "NO"}`,
     `BLE connected (${connectedDevices.length}): ${connectedDevices.map((d) => d.name).join(", ") || "-"}`,
     `Paired/classic (${classicPairedDevices.length}): ${
       classicPairedDevices
@@ -178,6 +223,11 @@ export default function Index() {
     }`,
     `Profile connected (${profileConnectedDevices.length}): ${
       profileConnectedDevices.map((d) => d.name).join(", ") || "-"
+    }`,
+    `Battery entries (${Object.keys(deviceBatteryByAddress).length}): ${
+      Object.entries(deviceBatteryByAddress)
+        .map(([address, battery]) => `${address}:${battery}%`)
+        .join(", ") || "-"
     }`,
   ].join("\n");
 
@@ -311,7 +361,11 @@ export default function Index() {
         setClassicError(message);
       }
 
-      await Promise.all([loadSystemAudioOutputs(), loadConnectedProfileDevices()]);
+      await Promise.all([
+        loadSystemAudioOutputs(),
+        loadConnectedProfileDevices(),
+        loadBondedBatteryLevels(),
+      ]);
 
       stopScanning();
       try {
@@ -359,7 +413,11 @@ export default function Index() {
         setClassicError(message);
       }
 
-      await Promise.all([loadSystemAudioOutputs(), loadConnectedProfileDevices()]);
+      await Promise.all([
+        loadSystemAudioOutputs(),
+        loadConnectedProfileDevices(),
+        loadBondedBatteryLevels(),
+      ]);
     })();
   }, [activeTab, adapterState, permission, upsertConnectedDevice]);
 
@@ -415,6 +473,7 @@ export default function Index() {
     try {
       const devices = await listConnectedDevices();
       devices.forEach((device) => upsertConnectedDevice(device));
+      reconcileConnectedSnapshot(devices.map((device) => device.id));
     } catch {
       // Ignore preload failures; scanning still works.
     }
@@ -452,6 +511,26 @@ export default function Index() {
     }
   }
 
+  async function loadBondedBatteryLevels() {
+    try {
+      const levels = await listBondedDeviceBatteryLevels();
+      const byAddress: Record<string, number> = {};
+      const byName: Record<string, number> = {};
+      levels.forEach((level) => {
+        if (typeof level.battery !== "number") return;
+        if (level.address) {
+          byAddress[level.address.trim().toUpperCase()] = level.battery;
+        }
+        byName[level.name.trim().toLowerCase()] = level.battery;
+      });
+      setDeviceBatteryByAddress(byAddress);
+      setDeviceBatteryByName(byName);
+    } catch {
+      setDeviceBatteryByAddress({});
+      setDeviceBatteryByName({});
+    }
+  }
+
   async function refreshAll() {
     if (permission !== "granted" || adapterState !== "PoweredOn") {
       return;
@@ -463,6 +542,7 @@ export default function Index() {
       loadClassicPaired(),
       loadSystemAudioOutputs(),
       loadConnectedProfileDevices(),
+      loadBondedBatteryLevels(),
     ]);
     startScanning();
     setRefreshing(false);
@@ -490,6 +570,30 @@ export default function Index() {
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : "Connect failed";
+      setDeviceState(id, "failed", message);
+    } finally {
+      setBusyById((prev) => ({ ...prev, [id]: false }));
+    }
+  }
+
+  async function pair(id: string) {
+    if (busyById[id]) return;
+
+    setBusyById((prev) => ({ ...prev, [id]: true }));
+    setDeviceState(id, "connecting");
+
+    try {
+      const address = id.trim().toUpperCase();
+      const isMacAddress = /^([0-9A-F]{2}:){5}[0-9A-F]{2}$/.test(address);
+      if (!isMacAddress) {
+        throw new Error("Pairing is available only for devices exposing a Bluetooth address.");
+      }
+
+      await pairBluetoothDevice(id);
+      setDeviceState(id, "disconnected");
+      await loadClassicPaired();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Pair failed";
       setDeviceState(id, "failed", message);
     } finally {
       setBusyById((prev) => ({ ...prev, [id]: false }));
@@ -627,7 +731,7 @@ export default function Index() {
         <View className="rounded-3xl border border-white/15 bg-white/10 p-4">
           <Text className="text-xs font-semibold text-slate-300">Live Status</Text>
           <Text className="mt-1 text-4xl font-black text-white">
-            {connectedDevices.length} Active
+            {totalActiveConnectedCount} Active
           </Text>
           <Text className="mt-3 text-xs text-slate-300">
             Scan: {scanActive ? "Running" : "Stopped"} | Permission: {permission}
@@ -739,7 +843,8 @@ export default function Index() {
             <Text className="mt-2 text-xs text-slate-200">
               Native module: {nativeDebug.modulePresent ? "YES" : "NO"} | Audio method:{" "}
               {nativeDebug.hasAudioOutputsMethod ? "YES" : "NO"} | Profile method:{" "}
-              {nativeDebug.hasProfileMethod ? "YES" : "NO"}
+              {nativeDebug.hasProfileMethod ? "YES" : "NO"} | Battery method:{" "}
+              {nativeDebug.hasBatteryMethod ? "YES" : "NO"}
             </Text>
             <Text className="mt-2 text-xs text-slate-200">
               BLE connected: {connectedDevices.length}
@@ -752,6 +857,9 @@ export default function Index() {
             </Text>
             <Text className="text-xs text-slate-200">
               Profile connected: {profileConnectedDevices.length}
+            </Text>
+            <Text className="text-xs text-slate-200">
+              Battery entries: {Object.keys(deviceBatteryByAddress).length}
             </Text>
             <Text className="mt-2 text-[11px] text-slate-300">
               BLE: {connectedDevices.map((d) => d.name).join(", ") || "-"}
@@ -768,6 +876,12 @@ export default function Index() {
             <Text className="text-[11px] text-slate-300">
               Profiles: {profileConnectedDevices.map((d) => d.name).join(", ") || "-"}
             </Text>
+            <Text className="text-[11px] text-slate-300">
+              Battery:{" "}
+              {Object.entries(deviceBatteryByAddress)
+                .map(([address, battery]) => `${address}:${battery}%`)
+                .join(", ") || "-"}
+            </Text>
           </View>
         ) : null}
 
@@ -783,7 +897,7 @@ export default function Index() {
         {activeTab === "smart" ? (
           <ConnectedTab
             connectedDevices={connectedDevices}
-            activeSystemDevices={activeSystemDevices}
+            activeSystemDevices={connectedSystemDevices}
             lowBatteryCount={lowBatteryDevices.length}
             unstableCount={unstableDevices.length}
             retryStateById={retryStateById}
@@ -797,7 +911,7 @@ export default function Index() {
 
         {activeTab === "audio" ? (
           <PairedTab
-            pairedDevices={classicPairedDevices}
+            pairedDevices={pairedDevicesWithActiveState}
             onOpenSettings={() => void openBluetoothSettings()}
           />
         ) : null}
@@ -806,10 +920,11 @@ export default function Index() {
           <NearbyTab
             nearbyDevices={nearbyDevices}
             busyById={busyById}
+            pairedIds={pairedIdSet}
             onScan={startScanning}
-            onConnectOrDisconnect={(id, canConnect) =>
-              canConnect ? void connect(id) : void disconnect(id)
-            }
+            onConnect={(id) => void connect(id)}
+            onDisconnect={(id) => void disconnect(id)}
+            onPair={(id) => void pair(id)}
           />
         ) : null}
         </Animated.View>

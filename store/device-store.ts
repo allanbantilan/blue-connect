@@ -11,6 +11,7 @@ type DeviceStore = {
   setBluetoothOn: (value: boolean) => void;
   upsertNearbyDevice: (payload: { id: string; name: string; rssi?: number | null }) => void;
   upsertConnectedDevice: (payload: { id: string; name: string; rssi?: number | null }) => void;
+  reconcileConnectedSnapshot: (connectedIds: string[]) => void;
   setDeviceState: (id: string, state: BluetoothDevice["state"], lastError?: string) => void;
   setBattery: (id: string, battery?: number) => void;
   toggleFavorite: (id: string) => void;
@@ -84,6 +85,25 @@ export const useDeviceStore = create<DeviceStore>((set, get) => ({
       nearbyIds: nextNearby,
       connectedIds: mergeConnectedIds(nextDevices),
     });
+  },
+
+  reconcileConnectedSnapshot: (connectedIds) => {
+    const connectedIdSet = new Set(connectedIds);
+    const nextDevices: DeviceMap = { ...get().devicesById };
+
+    Object.values(nextDevices).forEach((device) => {
+      if (
+        (device.state === "connected" || device.state === "reconnecting") &&
+        !connectedIdSet.has(device.id)
+      ) {
+        nextDevices[device.id] = {
+          ...device,
+          state: "disconnected",
+        };
+      }
+    });
+
+    set({ devicesById: nextDevices, connectedIds: mergeConnectedIds(nextDevices) });
   },
 
   setDeviceState: (id, state, lastError) => {

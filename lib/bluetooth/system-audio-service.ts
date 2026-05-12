@@ -17,6 +17,10 @@ type AudioModule = {
   getConnectedProfileDevices: () => Promise<
     { name?: string; address?: string; profile?: number }[]
   >;
+  getBondedDeviceBatteryLevels: () => Promise<
+    { name?: string; address?: string; battery?: number }[]
+  >;
+  pairDevice: (address: string) => Promise<boolean>;
 };
 
 function getAudioModule(): AudioModule | null {
@@ -30,6 +34,7 @@ export function getSystemAudioDebugStatus() {
     modulePresent: Boolean(module),
     hasAudioOutputsMethod: Boolean(module?.getActiveBluetoothAudioOutputs),
     hasProfileMethod: Boolean(module?.getConnectedProfileDevices),
+    hasBatteryMethod: Boolean(module?.getBondedDeviceBatteryLevels),
   };
 }
 
@@ -67,4 +72,37 @@ export async function listConnectedProfileDevices(): Promise<SystemAudioOutput[]
       address,
     };
   });
+}
+
+export async function listBondedDeviceBatteryLevels(): Promise<
+  { id: string; name: string; address?: string; battery?: number }[]
+> {
+  const module = getAudioModule();
+  if (!module?.getBondedDeviceBatteryLevels) {
+    return [];
+  }
+
+  const devices = await module.getBondedDeviceBatteryLevels();
+  return devices.map((device, index) => {
+    const name = device.name?.trim() || "Bluetooth Device";
+    const address = device.address?.trim();
+    return {
+      id: address ? `battery:${address}` : `battery:${name}:${index}`,
+      name,
+      address,
+      battery:
+        typeof device.battery === "number" && device.battery >= 0 && device.battery <= 100
+          ? device.battery
+          : undefined,
+    };
+  });
+}
+
+export async function pairBluetoothDevice(address: string): Promise<boolean> {
+  const module = getAudioModule();
+  if (!module?.pairDevice) {
+    throw new Error("Pair API is not available in this build.");
+  }
+
+  return Boolean(await module.pairDevice(address));
 }

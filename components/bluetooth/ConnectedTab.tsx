@@ -11,6 +11,7 @@ type ActiveSystemDevice = {
   id: string;
   name: string;
   status: string;
+  battery?: number;
 };
 
 type RetryState = {
@@ -72,7 +73,7 @@ export function ConnectedTab({
         </Pressable>
       </View>
 
-      {connectedDevices.length === 0 ? (
+      {connectedDevices.length === 0 && activeSystemDevices.length === 0 ? (
         <View className="rounded-2xl border border-white/15 bg-slate-900/50 p-4">
           <Text className="text-sm text-slate-200">No devices connected yet.</Text>
         </View>
@@ -118,7 +119,9 @@ export function ConnectedTab({
               <View className="min-w-0 flex-1 pr-2">
                 <Text className="text-sm font-bold text-white">{device.name}</Text>
                 <Text className="mt-1 text-xs text-violet-100">State: {device.status}</Text>
-                <Text className="mt-1 text-xs text-violet-100">Battery: unavailable</Text>
+                <Text className="mt-1 text-xs text-violet-100">
+                  Battery: {batteryText(device.battery)}
+                </Text>
               </View>
               <View className="rounded-full bg-white/20 px-2.5 py-1">
                 <Text className="text-[11px] font-bold text-white">System</Text>

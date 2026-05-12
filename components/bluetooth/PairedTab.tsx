@@ -4,6 +4,7 @@ type PairedDevice = {
   id: string;
   name: string;
   connected: boolean;
+  battery?: number;
 };
 
 type PairedTabProps = {
@@ -36,6 +37,10 @@ export function PairedTab({ pairedDevices, onOpenSettings }: PairedTabProps) {
                 <Text className="text-sm font-bold text-white">{device.name}</Text>
                 <Text className="mt-1 text-xs text-violet-100">
                   Status: {device.connected ? "Active" : "Inactive"}
+                </Text>
+                <Text className="mt-1 text-xs text-violet-100">
+                  Battery:{" "}
+                  {typeof device.battery === "number" ? `${device.battery}%` : "Unavailable"}
                 </Text>
               </View>
               <View className="items-end gap-2">

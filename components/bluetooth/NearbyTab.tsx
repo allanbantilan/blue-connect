@@ -11,15 +11,21 @@ type NearbyDevice = {
 type NearbyTabProps = {
   nearbyDevices: NearbyDevice[];
   busyById: Record<string, boolean>;
+  pairedIds: Set<string>;
   onScan: () => void;
-  onConnectOrDisconnect: (id: string, canConnect: boolean) => void;
+  onConnect: (id: string) => void;
+  onDisconnect: (id: string) => void;
+  onPair: (id: string) => void;
 };
 
 export function NearbyTab({
   nearbyDevices,
   busyById,
+  pairedIds,
   onScan,
-  onConnectOrDisconnect,
+  onConnect,
+  onDisconnect,
+  onPair,
 }: NearbyTabProps) {
   return (
     <>
@@ -36,7 +42,9 @@ export function NearbyTab({
       <View className="gap-3">
         {nearbyDevices.map((device) => {
           const isBusy = busyById[device.id];
-          const canConnect = device.state !== "connected";
+          const isConnected = device.state === "connected";
+          const isPaired = pairedIds.has(device.id.trim().toUpperCase());
+          const actionLabel = isConnected ? "Disconnect" : isPaired ? "Connect" : "Pair";
 
           return (
             <View
@@ -54,11 +62,21 @@ export function NearbyTab({
                 </View>
                 <Pressable
                   disabled={isBusy}
-                  onPress={() => onConnectOrDisconnect(device.id, canConnect)}
+                  onPress={() => {
+                    if (isConnected) {
+                      onDisconnect(device.id);
+                      return;
+                    }
+                    if (isPaired) {
+                      onConnect(device.id);
+                      return;
+                    }
+                    onPair(device.id);
+                  }}
                   className="rounded-lg bg-cyan-300 px-2.5 py-1.5 disabled:opacity-60"
                 >
                   <Text className="text-[11px] font-bold text-slate-900">
-                    {isBusy ? "Working..." : canConnect ? "Connect" : "Disconnect"}
+                    {isBusy ? "Working..." : actionLabel}
                   </Text>
                 </Pressable>
               </View>

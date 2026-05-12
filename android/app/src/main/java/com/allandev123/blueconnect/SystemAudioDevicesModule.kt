@@ -115,6 +115,64 @@ class SystemAudioDevicesModule(private val reactContext: ReactApplicationContext
     }
   }
 
+  @ReactMethod
+  fun getBondedDeviceBatteryLevels(promise: Promise) {
+    try {
+      val adapter = BluetoothAdapter.getDefaultAdapter()
+      if (adapter == null) {
+        promise.resolve(Arguments.createArray())
+        return
+      }
+
+      val result = Arguments.createArray()
+      for (device in adapter.bondedDevices) {
+        val batteryLevel = resolveBatteryLevel(device)
+        if (batteryLevel < 0 || batteryLevel > 100) {
+          continue
+        }
+
+        val map = Arguments.createMap()
+        map.putString("address", device.address)
+        map.putString("name", device.name ?: "Bluetooth Device")
+        map.putInt("battery", batteryLevel)
+        result.pushMap(map)
+      }
+
+      promise.resolve(result)
+    } catch (error: Exception) {
+      promise.reject("BONDED_BATTERY_QUERY_FAILED", error)
+    }
+  }
+
+  @ReactMethod
+  fun pairDevice(address: String, promise: Promise) {
+    try {
+      val adapter = BluetoothAdapter.getDefaultAdapter()
+      if (adapter == null) {
+        promise.reject("NO_BLUETOOTH_ADAPTER", "Bluetooth adapter not available")
+        return
+      }
+
+      val normalizedAddress = address.trim()
+      if (normalizedAddress.isBlank()) {
+        promise.reject("INVALID_ADDRESS", "Device address is required")
+        return
+      }
+
+      val device = adapter.getRemoteDevice(normalizedAddress)
+      val alreadyBonded = device.bondState == BluetoothDevice.BOND_BONDED
+      if (alreadyBonded) {
+        promise.resolve(true)
+        return
+      }
+
+      val started = device.createBond()
+      promise.resolve(started)
+    } catch (error: Exception) {
+      promise.reject("PAIR_DEVICE_FAILED", error)
+    }
+  }
+
   private fun isBluetoothOutput(device: AudioDeviceInfo): Boolean {
     return when (device.type) {
       AudioDeviceInfo.TYPE_BLUETOOTH_A2DP -> true
@@ -122,6 +180,19 @@ class SystemAudioDevicesModule(private val reactContext: ReactApplicationContext
       AudioDeviceInfo.TYPE_BLE_SPEAKER -> true
       AudioDeviceInfo.TYPE_BLE_BROADCAST -> true
       else -> false
+    }
+  }
+
+  private fun resolveBatteryLevel(device: BluetoothDevice): Int {
+    return try {
+      val method = device.javaClass.getMethod("getBatteryLevel")
+      val value = method.invoke(device)
+      when (value) {
+        is Int -> value
+        else -> -1
+      }
+    } catch (_: Exception) {
+      -1
     }
   }
 }
