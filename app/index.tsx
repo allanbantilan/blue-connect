@@ -29,7 +29,10 @@ import {
   listPairedClassicDevices,
   type ClassicPairedDevice,
 } from "@/lib/bluetooth/classic-service";
-import { listActiveBluetoothAudioOutputs } from "@/lib/bluetooth/system-audio-service";
+import {
+  listActiveBluetoothAudioOutputs,
+  listConnectedProfileDevices,
+} from "@/lib/bluetooth/system-audio-service";
 import { ConnectedTab } from "@/components/bluetooth/ConnectedTab";
 import { NearbyTab } from "@/components/bluetooth/NearbyTab";
 import { PairedTab } from "@/components/bluetooth/PairedTab";
@@ -65,6 +68,9 @@ export default function Index() {
   >([]);
   const [activeTab, setActiveTab] = useState<ViewTab>("smart");
   const [systemAudioOutputs, setSystemAudioOutputs] = useState<
+    { id: string; name: string; address?: string }[]
+  >([]);
+  const [profileConnectedDevices, setProfileConnectedDevices] = useState<
     { id: string; name: string; address?: string }[]
   >([]);
 
@@ -105,6 +111,30 @@ export default function Index() {
       .map((output) => ({
         id: output.id,
         name: output.name,
+        status: "Active",
+      })),
+    ...profileConnectedDevices
+      .filter(
+        (profileDevice) =>
+          !connectedDevices.some(
+            (ble) =>
+              ble.id === profileDevice.address ||
+              ble.name.trim().toLowerCase() === profileDevice.name.trim().toLowerCase(),
+          ) &&
+          !classicPairedDevices.some(
+            (paired) =>
+              paired.id === profileDevice.address ||
+              paired.name.trim().toLowerCase() === profileDevice.name.trim().toLowerCase(),
+          ) &&
+          !systemAudioOutputs.some(
+            (output) =>
+              output.address === profileDevice.address ||
+              output.name.trim().toLowerCase() === profileDevice.name.trim().toLowerCase(),
+          ),
+      )
+      .map((profileDevice) => ({
+        id: profileDevice.id,
+        name: profileDevice.name,
         status: "Active",
       })),
   ];
@@ -249,7 +279,7 @@ export default function Index() {
         setClassicError(message);
       }
 
-      await loadSystemAudioOutputs();
+      await Promise.all([loadSystemAudioOutputs(), loadConnectedProfileDevices()]);
 
       stopScanning();
       try {
@@ -297,7 +327,7 @@ export default function Index() {
         setClassicError(message);
       }
 
-      await loadSystemAudioOutputs();
+      await Promise.all([loadSystemAudioOutputs(), loadConnectedProfileDevices()]);
     })();
   }, [activeTab, adapterState, permission, upsertConnectedDevice]);
 
@@ -381,13 +411,27 @@ export default function Index() {
     }
   }
 
+  async function loadConnectedProfileDevices() {
+    try {
+      const devices = await listConnectedProfileDevices();
+      setProfileConnectedDevices(devices);
+    } catch {
+      setProfileConnectedDevices([]);
+    }
+  }
+
   async function refreshAll() {
     if (permission !== "granted" || adapterState !== "PoweredOn") {
       return;
     }
 
     setRefreshing(true);
-    await Promise.all([loadConnectedBle(), loadClassicPaired(), loadSystemAudioOutputs()]);
+    await Promise.all([
+      loadConnectedBle(),
+      loadClassicPaired(),
+      loadSystemAudioOutputs(),
+      loadConnectedProfileDevices(),
+    ]);
     startScanning();
     setRefreshing(false);
   }

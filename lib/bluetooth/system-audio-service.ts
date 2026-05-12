@@ -14,6 +14,9 @@ export type SystemAudioOutput = {
 
 type AudioModule = {
   getActiveBluetoothAudioOutputs: () => Promise<NativeAudioOutput[]>;
+  getConnectedProfileDevices: () => Promise<
+    { name?: string; address?: string; profile?: number }[]
+  >;
 };
 
 function getAudioModule(): AudioModule | null {
@@ -33,6 +36,24 @@ export async function listActiveBluetoothAudioOutputs(): Promise<SystemAudioOutp
     const address = output.address?.trim();
     return {
       id: address ? `audio:${address}` : `audio:${name}:${index}`,
+      name,
+      address,
+    };
+  });
+}
+
+export async function listConnectedProfileDevices(): Promise<SystemAudioOutput[]> {
+  const module = getAudioModule();
+  if (!module?.getConnectedProfileDevices) {
+    return [];
+  }
+
+  const devices = await module.getConnectedProfileDevices();
+  return devices.map((device, index) => {
+    const name = device.name?.trim() || "Bluetooth Device";
+    const address = device.address?.trim();
+    return {
+      id: address ? `profile:${address}` : `profile:${name}:${index}`,
       name,
       address,
     };
